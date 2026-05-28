@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local Streamlit secrets
+.streamlit/secrets.toml
+
+# Runtime/debug output
+*.log
+archive/
+archive/**/*.log
+OLD/**/*.log
+Old2/**/*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
