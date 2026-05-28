@@ -1,45 +1,70 @@
 # Stage
 
-Stage is a Streamlit-hosted ReactFlow workspace for sketching image/video generation graphs, compiling them into Veo payloads, and submitting generation jobs through a local server-side proxy.
+Stage is a Vite React and Express app for sketching image/video generation graphs, compiling them into Veo payloads, and submitting generation jobs through a server-side proxy.
 
 ## Run
 
-```powershell
-python -m pip install -r requirements.txt
-python -m streamlit run app.py
-```
-
-Streamlit defaults to `http://localhost:8501`. If that port is busy, pass another port:
+Install dependencies:
 
 ```powershell
-python -m streamlit run app.py --server.port 8502
+npm.cmd install
 ```
 
-## Secrets
+Copy `.env.example` to `.env` and set `GOOGLE_API_KEY`.
 
-Copy `.streamlit/secrets.example.toml` to `.streamlit/secrets.toml` and fill in your real values. The real secrets file is ignored by Git.
-
-The app starts a localhost-only proxy when it runs. Browser code receives only the proxy URL and a temporary token; Google API calls and video downloads are performed server-side so the API key is not exposed in the iframe.
-
-## Current Architecture
-
-- `app.py` is the Streamlit entrypoint.
-- `assets/stage.html` contains the ReactFlow UI template.
-- `stage_ui.py` loads the UI template and injects browser-safe runtime config.
-- `veo_proxy.py` contains the localhost-only Veo API proxy and download service.
-- The graph compiler produces one shared multi-clip payload for both the JSON feed and the Run button.
-- The Run button submits clips sequentially, polls each operation with a 20-minute timeout, then downloads the generated video through the local proxy.
-- `archive/` contains previous experiments and debug logs moved out of the active app root.
-
-## Verification
-
-Basic checks:
+Start the dev server:
 
 ```powershell
-python -m py_compile app.py veo_proxy.py stage_ui.py
-python -m streamlit run app.py --server.port 8502
+npm.cmd run dev
 ```
 
-## Follow-Up Refactor
+The app defaults to `http://127.0.0.1:5173`.
 
-The next structural step, if needed, is to split `assets/stage.html` into separate CSS and JavaScript files or move it into a small Vite app. The security-sensitive API path already lives in Python.
+To let other machines on the same network connect, set `HOST=0.0.0.0` in `.env` and restart the server. Keep this on a trusted network unless you add real authentication.
+
+## Production
+
+Build the React app:
+
+```powershell
+npm.cmd run build
+```
+
+Serve the built app through Express:
+
+```powershell
+npm.cmd run start
+```
+
+## Configuration
+
+Preferred configuration is `.env`:
+
+```text
+GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY
+VEO_DEFAULT_FPS=24
+VEO_DEFAULT_RESOLUTION=1080p
+HOST=127.0.0.1
+PORT=5173
+```
+
+For compatibility, the server also reads `.streamlit/secrets.toml` if it already exists, but Streamlit is no longer required.
+
+## Architecture
+
+- `src/App.jsx` contains the ReactFlow workspace UI.
+- `src/App.css` contains the app styling migrated from the previous Streamlit-hosted HTML shell.
+- `src/main.jsx` loads browser-safe runtime config from the Express server before rendering React.
+- `server/index.js` serves the React app and owns the Veo API proxy routes.
+- The browser receives only proxy metadata and a temporary token. Google API calls and video downloads happen server-side so the API key is not exposed.
+
+API routes:
+
+```text
+GET  /api/config
+POST /api/veo/submit
+POST /api/veo/status
+GET  /api/veo/download
+```
+
+The graph compiler still produces one shared multi-clip payload for both the JSON feed and the Run button. The Run button submits clips sequentially, polls each operation with a 20-minute timeout, then downloads generated video through the Express proxy.

@@ -9,7 +9,12 @@ __pycache__/
 venv/
 env/
 
-# Local Streamlit secrets
+# Node/Vite
+node_modules/
+dist/
+
+# Local secrets
+.env
 .streamlit/secrets.toml
 
 # Runtime/debug output

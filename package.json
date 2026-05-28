@@ -1,0 +1,22 @@
+{
+  "name": "stage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.js",
+    "build": "vite build",
+    "start": "node server/index.js --production"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "htm": "^3.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "reactflow": "^11.11.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}
