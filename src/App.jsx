@@ -2,7 +2,6 @@ import React from "react";
 import htm from "htm";
 import ReactFlow, {
   Background,
-  Controls,
   MiniMap,
   addEdge,
   useNodesState,
@@ -32,9 +31,33 @@ const MODEL_CATALOG = {
 
 const RES_PRESETS = ["SD","HD","2K","4K"];
 const RES_MULT = { SD:0.7, HD:1.0, "2K":1.25, "4K":1.6 };
+const ESTIMATE_RATES = {
+  generator_image_hd: 3,
+  nano_banana_hd: 8,
+  asset_analysis: 1,
+  audio_multiplier: 1.1
+};
 const ASPECT_PRESETS = ["1:1","9:16","16:9","21:9"];
 
 const NODE_COLORS = { model:"#E63946", ref:"#F4A261", face:"#E9C46A", body:"#2A9D8F", clothing:"#3A86FF", pose:"#8E44AD", param:"#6C757D", clip:"#6C757D", nano_banana:"#FFD700" };
+const REF_GATE_COLORS = { pending:"#E63946", active:"#4ec9b0" };
+const ANALYSIS_SCHEMA_VERSION = "stage.asset_reference.analysis.v1";
+const GRID_DOT_GAP = 18;
+const FLOW_MIN_ZOOM = 0.08;
+const WIRE_PATCH_COLOR = REF_GATE_COLORS.active;
+const MINIMAP_STYLE = {
+  backgroundColor: "rgba(20,20,20,.62)",
+  border: "1px solid rgba(255,255,255,.12)",
+  borderRadius: "8px",
+  boxShadow: "0 14px 32px rgba(0,0,0,.32)",
+  backdropFilter: "blur(8px)",
+};
+function miniMapNodeColor(node){
+  return NODE_COLORS[node.type] || "#777";
+}
+function miniMapNodeStrokeColor(node){
+  return NODE_COLORS[node.type] || "#9a9a9a";
+}
 
 const PALETTE = [
   { key:"model", title:"Model", subtitle:"Final render + chaining", tags:["Veo 3.1 Fast/Quality"] },
@@ -52,22 +75,60 @@ const PALETTE = [
   { key:"clip", title:"Background", subtitle:"Scene / environment", tags:["backdrop"] }
 ];
 
-const IMAGE_GEN_KEYS = ["model","nano_banana","ref","face","body","clothing","pose"];
 const PARAM_KEYS = PALETTE.map(p=>p.key).filter(k=>k.startsWith("param_"));
-const MISC_KEYS = ["clip"];
+const LIBRARY_DEPARTMENTS = [
+  { title:"Casting", keys:["face","pose","body","ref","nano_banana"] },
+  { title:"Hair and Makeup", keys:["face","ref","nano_banana"] },
+  { title:"Wardrobe", keys:["clothing","ref","nano_banana"] },
+  { title:"Production Design", keys:["ref","nano_banana"] },
+  { title:"Cinematography", keys:PARAM_KEYS },
+  { title:"Directing", keys:[] },
+  { title:"Print", keys:["model"] }
+];
+const LIBRARY_UTILS = ["clip"];
 const byKeys = (keys) => keys.map(k => PALETTE.find(p=>p.key===k)).filter(Boolean);
+function paletteTypeForKey(key){
+  return String(key || "").startsWith("param_") ? "param" : key;
+}
+function paletteColorForKey(key){
+  const type = paletteTypeForKey(key);
+  if(type === "ref") return REF_GATE_COLORS.pending;
+  return NODE_COLORS[type] || "#777";
+}
+function paletteItemStyle(key){
+  const color = paletteColorForKey(key);
+  return {
+    borderColor: color,
+    background: `linear-gradient(90deg, ${color}2b, #2d2d2d 68%)`,
+    boxShadow: `inset 3px 0 0 ${color}`,
+  };
+}
 function isGeneratorType(t){ return ["face","body","clothing","pose"].includes(t); }
+function isCascadeTargetType(t){ return isGeneratorType(t) || t === "nano_banana"; }
 function makeId(prefix){ return (prefix||"n") + "_" + Math.random().toString(16).slice(2,10); }
+function snapValue(value, grid){
+  return Math.round(Number(value || 0) / grid) * grid;
+}
+function snapFlowPosition(position, enabled){
+  if(!enabled || !position) return position;
+  return { x: snapValue(position.x, GRID_DOT_GAP), y: snapValue(position.y, GRID_DOT_GAP) };
+}
+function isTextEditingTarget(event){
+  const el = event && event.target;
+  if(!el) return false;
+  const tag = String(el.tagName || "").toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || !!el.isContentEditable;
+}
 
 function defaultPropsFor(type){
   if(type==="model"){
     return { title:"MODEL (Veo)", subtitle:"Top of pipe (governs capabilities)", tags:["gates features","credits + price"], model_ver:"Veo 3.1 Quality", seconds_per_clip:8, audio_enabled:true, usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
   }
   if(type==="nano_banana"){ 
-    return { title:"Nano Banana Pro", subtitle:"14-Input Blender", tags:["gemini 3 pro"], res:"HD", slots: Array(14).fill(null), prompt: "", result_uri: null }; 
+    return { title:"Nano Banana Pro", subtitle:"14-Input Blender", tags:["gemini 3 pro"], res:"HD", aspect:"16:9", slots: Array(14).fill(null), prompt: "", result_uri: null, result_data_url: null, result_text: "", result_model: "", generation_status:"idle" }; 
   }
   if(type==="ref"){
-    return { title:"Asset Reference", subtitle:"Upload + analyze", tags:["nano banana pro","identity lock"], gcs_uri:"gs://your-bucket/character_master.jpg", reference_mode:"double_stacked", ref_slots:2, image_store_key:null, image_preview_url:null, image_data_url:null, image_name:null, analysis:null };
+    return { title:"Asset Reference", subtitle:"", tags:["nano banana pro","identity lock"], gcs_uri:"gs://your-bucket/character_master.jpg", reference_mode:"double_stacked", ref_slots:2, image_store_key:null, image_preview_url:null, image_data_url:null, image_name:null, analysis:null, analysis_status:"pending" };
   }
   if(type==="face"){
     return { title:"CU / Face (Variations)", subtitle:"Angles + identity lock", tags:["batch 4 default","portrait"], batch:4, res:"HD", aspect:"1:1", ref_slots:1, prompt:"4 facial variations (slightly different angles) of the SAME character identity. Preserve facial proportions, eye spacing, silhouette. Neutral grey background. Cinematic portrait lighting." };
@@ -104,8 +165,376 @@ function incomingParams(nodeId, nodes, edges){
   return params;
 }
 
-async function nanoBananaAnalyze(_imageDataUrl){
-  return { metadata_tags: ["studio_portrait","character_reference","identity_anchor","controlled_lighting"] };
+function estimateNumber(value, fallback){
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function roundCredits(value){
+  const num = Number(value) || 0;
+  return Math.round((num + Number.EPSILON) * 10) / 10;
+}
+
+function formatCredits(value){
+  const num = roundCredits(value);
+  if(Math.abs(num) >= 100) return num.toFixed(0);
+  return Number.isInteger(num) ? String(num) : num.toFixed(1);
+}
+
+function resMultiplier(res){
+  const key = String(res || "HD").toUpperCase();
+  return RES_MULT[key] !== undefined ? RES_MULT[key] : 1.0;
+}
+
+function effectiveNodeValue(node, nodes, edges, key, fallback){
+  const ov = incomingParams(node.id, nodes, edges);
+  const own = node.data || {};
+  return ov[key] !== undefined ? ov[key] : (own[key] !== undefined ? own[key] : fallback);
+}
+
+function effectiveNodeBatch(node, nodes, edges){
+  return Math.max(1, Math.ceil(estimateNumber(effectiveNodeValue(node, nodes, edges, "batch", 1), 1)));
+}
+
+function effectiveNodeRes(node, nodes, edges){
+  return String(effectiveNodeValue(node, nodes, edges, "res", "HD") || "HD").toUpperCase();
+}
+
+function isGatewayDisabled(node){
+  const data = (node && node.data) || {};
+  const warningText = Array.isArray(data.cascade_warnings) ? data.cascade_warnings.join(" ") : "";
+  return !!(data.disabled && (data.cascade_source_ref_id || /Asset Reference analysis/i.test(warningText)));
+}
+
+function isManuallyDisabled(node){
+  return !!(node && node.data && node.data.disabled && !isGatewayDisabled(node));
+}
+
+function isEstimateEligible(node){
+  return !!node && !isManuallyDisabled(node);
+}
+
+function sortedGenerators(gens){
+  const order = ["face","body","clothing","pose"];
+  return gens.slice().sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
+}
+
+function nanoInputCount(node, edges){
+  const slots = (node.data && node.data.slots) || [];
+  const used = new Set();
+  edges.forEach(edge => {
+    if(edge.target === node.id && /^in_\d+$/.test(String(edge.targetHandle || ""))) used.add(edge.targetHandle);
+  });
+  slots.forEach((slot, index) => {
+    if(slot) used.add(`manual_${index}`);
+  });
+  return used.size;
+}
+
+function hasReferenceImage(node){
+  const data = (node && node.data) || {};
+  return !!(data.image_store_key || data.image_preview_url || data.image_data_url);
+}
+
+function estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady){
+  const secondsDefault = Math.max(1, estimateNumber(modelProps.seconds_per_clip, 8));
+  const audioEnabled = !!(modelProps.audio_enabled && caps.supports_audio);
+  const audioMult = audioEnabled ? ESTIMATE_RATES.audio_multiplier : 1.0;
+  const usdPerCredit = Math.max(0, estimateNumber(modelProps.usd_per_credit, 0.01));
+  const usdToLocal = Math.max(0, estimateNumber(modelProps.usd_to_local, 1.0));
+  const currency = modelProps.currency || "USD";
+  const sectionsRaw = { video: 0, image_prep: 0, nano_banana: 0, analysis: 0 };
+  const breakdown = [];
+  const warnings = [];
+  const includedGeneratorIds = new Set();
+  const clipNodes = nodes.filter(n => n.type === "clip").slice().sort((a, b) => Number((a.data && a.data.clip_index) || 0) - Number((b.data && b.data.clip_index) || 0));
+  const hasExplicitClips = clipNodes.length > 0;
+  const clipList = hasExplicitClips ? clipNodes : [{
+    id: "VIRTUAL_CLIP_1",
+    type: "clip",
+    data: { clip_name: "CLIP_1", clip_index: 1, seconds: secondsDefault }
+  }];
+
+  function generatorsForClip(clipId){
+    const pool = hasExplicitClips
+      ? nodes.filter(n => n.parentNode === clipId)
+      : nodes.filter(n => !n.parentNode);
+    return sortedGenerators(pool.filter(n => isGeneratorType(n.type) && isEstimateEligible(n)));
+  }
+
+  if(hasExplicitClips){
+    const ungrouped = nodes.filter(n => isGeneratorType(n.type) && !n.parentNode && isEstimateEligible(n));
+    if(ungrouped.length){
+      warnings.push(`${ungrouped.length} ungrouped generator node(s) are outside clip groups, so they are excluded from the Veo clip estimate.`);
+    }
+  }
+
+  clipList.forEach((clip) => {
+    const gens = generatorsForClip(clip.id);
+    gens.forEach(g => includedGeneratorIds.add(g.id));
+    const seconds = Math.max(1, estimateNumber(clip.data && clip.data.seconds, secondsDefault));
+    let resolutionBasis = "HD";
+    let highestResMult = 1.0;
+    gens.forEach(g => {
+      const res = effectiveNodeRes(g, nodes, edges);
+      const mult = resMultiplier(res);
+      if(mult >= highestResMult){
+        highestResMult = mult;
+        resolutionBasis = res;
+      }
+    });
+    const credits = seconds * caps.credits_per_sec_hd * highestResMult * audioMult;
+    sectionsRaw.video += credits;
+    breakdown.push({
+      category: "video",
+      name: (clip.data && clip.data.clip_name) || clip.id,
+      node_id: clip.id,
+      model: modelProps.model_ver,
+      seconds,
+      resolution_basis: resolutionBasis,
+      audio_enabled: audioEnabled,
+      credits: roundCredits(credits),
+      formula: `${seconds}s x ${caps.credits_per_sec_hd} credits/sec x ${highestResMult} res x ${audioMult} audio`
+    });
+  });
+
+  includedGeneratorIds.forEach((id) => {
+    const node = nodes.find(n => n.id === id);
+    if(!node) return;
+    const batch = effectiveNodeBatch(node, nodes, edges);
+    const res = effectiveNodeRes(node, nodes, edges);
+    const credits = batch * ESTIMATE_RATES.generator_image_hd * resMultiplier(res);
+    sectionsRaw.image_prep += credits;
+    breakdown.push({
+      category: "image_prep",
+      name: (node.data && node.data.title) || node.type,
+      node_id: node.id,
+      type: node.type,
+      batch,
+      resolution: res,
+      status: referenceGateReady ? "ready" : "planned_gateway_locked",
+      credits: roundCredits(credits),
+      formula: `${batch} image(s) x ${ESTIMATE_RATES.generator_image_hd} HD credits x ${resMultiplier(res)} res`
+    });
+  });
+
+  nodes.filter(n => n.type === "nano_banana" && isEstimateEligible(n)).forEach((node) => {
+    const res = String((node.data && node.data.res) || "HD").toUpperCase();
+    const inputs = nanoInputCount(node, edges);
+    const inputComplexity = 1 + Math.min(0.35, inputs * 0.025);
+    const credits = ESTIMATE_RATES.nano_banana_hd * resMultiplier(res) * inputComplexity;
+    sectionsRaw.nano_banana += credits;
+    breakdown.push({
+      category: "nano_banana",
+      name: (node.data && node.data.title) || "Nano Banana Pro",
+      node_id: node.id,
+      resolution: res,
+      image_inputs: inputs,
+      status: node.data && node.data.disabled ? "planned_gateway_locked" : "ready",
+      credits: roundCredits(credits),
+      formula: `${ESTIMATE_RATES.nano_banana_hd} HD credits x ${resMultiplier(res)} res x ${roundCredits(inputComplexity)} input complexity`
+    });
+  });
+
+  nodes.filter(n => n.type === "ref" && isEstimateEligible(n)).forEach((node) => {
+    if(!hasReferenceImage(node)) return;
+    const analyzed = isAnalysisActivated(node.data && node.data.analysis);
+    const credits = analyzed ? 0 : ESTIMATE_RATES.asset_analysis;
+    sectionsRaw.analysis += credits;
+    breakdown.push({
+      category: "analysis",
+      name: (node.data && node.data.title) || "Asset Reference",
+      node_id: node.id,
+      status: analyzed ? "already_analyzed" : "pending",
+      credits: roundCredits(credits),
+      formula: analyzed ? "already analyzed in this graph" : `${ESTIMATE_RATES.asset_analysis} analysis call`
+    });
+  });
+
+  if(!referenceGateReady){
+    warnings.push("Asset Reference gateway is locked; image-prep and downstream generation costs are planned estimates until analysis is run.");
+  }
+
+  const sections = Object.fromEntries(Object.entries(sectionsRaw).map(([key, value]) => [key, roundCredits(value)]));
+  const totalRaw = Object.values(sectionsRaw).reduce((sum, value) => sum + value, 0);
+  const totalUsd = totalRaw * usdPerCredit;
+  const totalLocal = totalUsd * usdToLocal;
+  return {
+    model: modelProps.model_ver,
+    basis: "planning_estimate",
+    ready: referenceGateReady,
+    seconds_default: secondsDefault,
+    audio_enabled: audioEnabled,
+    rates: {
+      veo_credits_per_sec_hd: caps.credits_per_sec_hd,
+      generator_image_hd: ESTIMATE_RATES.generator_image_hd,
+      nano_banana_hd: ESTIMATE_RATES.nano_banana_hd,
+      asset_analysis: ESTIMATE_RATES.asset_analysis,
+      audio_multiplier: ESTIMATE_RATES.audio_multiplier
+    },
+    sections,
+    total_credits: roundCredits(totalRaw),
+    usd_per_credit: usdPerCredit,
+    total_usd: totalUsd,
+    currency,
+    total_local: totalLocal,
+    breakdown,
+    warnings,
+    assumptions: [
+      "Veo video cost is estimated per compiled clip, using clip seconds, the selected model rate, the highest connected generator resolution in that clip, and the audio multiplier.",
+      "Image-prep generator nodes are estimated as still-image batches, not as full video renders.",
+      "Nano Banana Pro and Asset Reference analysis are separate API calls from the Veo Run button, but are included so the graph shows planned end-to-end cost.",
+      "Provider billing can differ from this local planning credit model; adjust ESTIMATE_RATES and MODEL_CATALOG when real pricing is known."
+    ]
+  };
+}
+
+function arrayValue(value){
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function isAnalysisActivated(analysis){
+  return !!(analysis && (analysis.activated || analysis.status === "analyzed" || (analysis.gateway && analysis.gateway.activated)));
+}
+
+function uniqueTags(tags, extra){
+  const out = [];
+  for(const tag of (tags || []).concat(extra || [])){
+    if(tag && !out.includes(tag)) out.push(tag);
+  }
+  return out;
+}
+
+function loadImageInfo(dataUrl){
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const sampleCanvas = document.createElement("canvas");
+      sampleCanvas.width = 24;
+      sampleCanvas.height = 24;
+      const ctx = sampleCanvas.getContext("2d");
+      ctx.drawImage(image, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      const data = ctx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+      let r = 0, g = 0, b = 0, count = 0;
+      for(let i = 0; i < data.length; i += 4){
+        const alpha = data[i + 3] / 255;
+        r += data[i] * alpha;
+        g += data[i + 1] * alpha;
+        b += data[i + 2] * alpha;
+        count += alpha;
+      }
+      count = count || 1;
+      r = Math.round(r / count);
+      g = Math.round(g / count);
+      b = Math.round(b / count);
+      const hex = "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+      const luminance = Math.round((0.2126 * r + 0.7152 * g + 0.0722 * b));
+      const orientation = image.width === image.height ? "square" : (image.width > image.height ? "landscape" : "portrait");
+      resolve({ width:image.width, height:image.height, orientation, average_color:hex, luminance });
+    };
+    image.onerror = () => reject(new Error("Image analysis decode failed."));
+    image.src = dataUrl;
+  });
+}
+
+function nodeCascadePrompt(analysis, type){
+  const prompts = (analysis && analysis.cascade && analysis.cascade.node_prompts) || {};
+  return prompts[type] || ((analysis && analysis.cascade && analysis.cascade.prompt_prefix) || "");
+}
+
+function referenceDescriptionFor(analysis, kind){
+  const descriptions = (analysis && analysis.cascade && analysis.cascade.reference_descriptions) || {};
+  if(descriptions[kind]) return descriptions[kind];
+  const profile = (analysis && analysis.identity_profile) || {};
+  return profile.summary || (kind === "style" ? "Style and lighting anchor from analyzed reference." : "Primary identity anchor from analyzed reference.");
+}
+
+function validationWarningsForPrompt(analysis, prompt){
+  if(!analysis || !prompt) return [];
+  const rules = analysis.validation_rules || {};
+  const terms = arrayValue(rules.forbidden_prompt_terms);
+  const lower = String(prompt).toLowerCase();
+  return terms
+    .filter(term => lower.includes(String(term).toLowerCase()))
+    .map(term => `Prompt contains identity-conflicting term: "${term}".`);
+}
+
+function requestReferenceAnalysis(nodeId){
+  window.dispatchEvent(new CustomEvent("stage:analyze-reference", { detail: { nodeId } }));
+}
+
+function requestReferenceUpload(nodeId, file){
+  window.dispatchEvent(new CustomEvent("stage:upload-reference", { detail: { nodeId, file } }));
+}
+
+function requestNanoBananaGeneration(nodeId){
+  window.dispatchEvent(new CustomEvent("stage:nano-generate", { detail: { nodeId } }));
+}
+
+async function nanoBananaAnalyze(imageDataUrl, meta){
+  const imageInfo = await loadImageInfo(imageDataUrl).catch(() => null);
+  const imageName = (meta && meta.imageName) || "uploaded reference";
+  const source = {
+    image_name: imageName,
+    width: imageInfo ? imageInfo.width : null,
+    height: imageInfo ? imageInfo.height : null,
+    orientation: imageInfo ? imageInfo.orientation : "unknown",
+    average_color: imageInfo ? imageInfo.average_color : null,
+    luminance: imageInfo ? imageInfo.luminance : null,
+  };
+  const palette = [source.average_color, source.orientation, source.luminance !== null ? (source.luminance > 150 ? "bright key" : "low key") : null].filter(Boolean);
+  const summary = `Use ${imageName} as the primary identity and style anchor. Preserve the uploaded subject, proportions, silhouette, palette, material cues, and lighting continuity unless a downstream node explicitly overrides a local detail.`;
+  const promptPrefix = `[ANALYZED ASSET REFERENCE] ${summary}`;
+  return {
+    schema: ANALYSIS_SCHEMA_VERSION,
+    status: "analyzed",
+    activated: true,
+    analyzed_at: new Date().toISOString(),
+    source,
+    gateway: {
+      activated: true,
+      activates_node_types: ["face", "body", "clothing", "pose"],
+      cascade_scope: "all downstream generator nodes"
+    },
+    identity_profile: {
+      summary,
+      subject: "Primary subject or asset in the uploaded reference image.",
+      identity_markers: [
+        "preserve the same face or object identity",
+        "preserve silhouette, proportions, and scale relationships",
+        "preserve distinctive visible marks, accessories, and material cues"
+      ],
+      wardrobe: ["derive wardrobe and accessory continuity from the reference unless a clothing node overrides it"],
+      palette,
+      lighting: "match the apparent lighting direction, contrast, and color temperature from the reference",
+      camera: source.orientation === "portrait" ? "portrait-oriented identity reference" : "wide or neutral identity reference",
+      background: "treat background as secondary unless a clip/background node overrides it",
+      negative: ["different person", "new identity", "changed face shape", "unrelated character"]
+    },
+    cascade: {
+      prompt_prefix: promptPrefix,
+      node_prompts: {
+        face: `${promptPrefix} Face pass: lock facial structure, eye spacing, profile, skin detail, and expression range to the reference.`,
+        body: `${promptPrefix} Body pass: lock body proportions, silhouette, posture language, and scale to the reference.`,
+        clothing: `${promptPrefix} Clothing pass: retain detected wardrobe/material logic while allowing controlled wardrobe exploration.`,
+        pose: `${promptPrefix} Pose pass: keep identity and body mechanics consistent while changing only the action or stance.`
+      },
+      reference_descriptions: {
+        asset: `Primary identity anchor from ${imageName}: preserve subject, proportions, silhouette, and visible details.`,
+        style: `Style anchor from ${imageName}: preserve palette ${palette.join(", ") || "from reference"}, lighting, and material tone.`
+      }
+    },
+    validation_rules: {
+      forbidden_prompt_terms: ["different person", "new identity", "changed face", "change face", "unrelated character"],
+      warnings: []
+    },
+    model_json_effects: [
+      "Adds identity_profile to the compiled model JSON.",
+      "Prefixes downstream generator prompts with cascade.node_prompts[type].",
+      "Improves reference image descriptions in ingredients.reference_images.",
+      "Blocks generation until this gateway is activated."
+    ]
+  };
 }
 
 function TagRow({ data }){
@@ -119,7 +548,7 @@ function TagRow({ data }){
 function ModelNode({ data }){
   const color = NODE_COLORS["model"] || "#888";
   return html`
-    <div className="nodeBox" style=${{borderColor: color}}>
+    <div className="nodeBox nodeModelGrid" style=${{borderColor: color}}>
       <div className="modelInputsRowTop">
         <span key="start" className="nodeMuted">Start Frame</span>
         <span key="end" className="nodeMuted">End Frame</span>
@@ -127,13 +556,13 @@ function ModelNode({ data }){
         <span key="asset2" className="nodeMuted">Asset 2</span>
         <span key="style" className="nodeMuted">Style</span>
       </div>
-      <${Handle} key="start-handle" type="target" position=${Position.Top} id="start" style=${{left:"10%"}} />
-      <${Handle} key="end-handle" type="target" position=${Position.Top} id="end" style=${{left:"30%"}} />
-      <${Handle} key="asset1-handle" type="target" position=${Position.Top} id="asset1" style=${{left:"50%"}} />
-      <${Handle} key="asset2-handle" type="target" position=${Position.Top} id="asset2" style=${{left:"70%"}} />
-      <${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"90%"}} />
-      <div style=${{display:"flex", justifyContent:"space-between", gap:"10px", marginTop:"10px"}}>
-        <div>
+      <${Handle} key="start-handle" type="target" position=${Position.Top} id="start" style=${{left:"36px"}} />
+      <${Handle} key="end-handle" type="target" position=${Position.Top} id="end" style=${{left:"108px"}} />
+      <${Handle} key="asset1-handle" type="target" position=${Position.Top} id="asset1" style=${{left:"180px"}} />
+      <${Handle} key="asset2-handle" type="target" position=${Position.Top} id="asset2" style=${{left:"252px"}} />
+      <${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"324px"}} />
+      <div className="nodeHeaderRow modelNodeHeaderRow">
+        <div className="nodeHeaderText">
           <div className="nodeTitle">${(data && data.title) || "Model (Veo)"}</div>
           <div className="nodeSub">${(data && data.subtitle) || "Final render + chaining"}</div>
         </div>
@@ -143,7 +572,7 @@ function ModelNode({ data }){
       <div className="nodeMuted" style=${{marginTop:"8px"}}>
         ${(data && data.model_ver) ? ("Selected: " + data.model_ver) : ""}
       </div>
-      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" />
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{left:"180px"}} />
     </div>
   `;
 }
@@ -151,9 +580,11 @@ function ModelNode({ data }){
 function BaseNode({ data, type, id }){
   const { setNodes } = useReactFlow();
   const disabled = !!(data && data.disabled);
-  const color = NODE_COLORS[type] || "#888";
+  const refAnalyzed = type === "ref" && isAnalysisActivated(data && data.analysis);
+  const color = type === "ref" ? (refAnalyzed ? REF_GATE_COLORS.active : REF_GATE_COLORS.pending) : (NODE_COLORS[type] || "#888");
   const isRef = (type === "ref" || type === "style_ref");
   const hasMultiInputs = ["face","body","clothing","pose"].includes(type);
+  const refUploadInputId = `ref-upload-${id}`;
   
   // Allow prompt editing directly on the node if it's a generator type
   const showPromptBox = ["face","body","clothing","pose"].includes(type);
@@ -162,17 +593,39 @@ function BaseNode({ data, type, id }){
   };
 
   return html`
-    <div className=${"nodeBox " + (disabled ? "nodeDisabled" : "")} style=${{borderColor: color}}>
+    <div className=${"nodeBox nodeGridBase nodeType-" + String(type || "node") + " " + (disabled ? "nodeDisabled " : "") + (type === "ref" ? (refAnalyzed ? "referenceGateOn" : "referenceGateOff") : "")} style=${{borderColor: color}}>
       <div className="topInputsRow">${hasMultiInputs ? html`<span key="asset" className="nodeMuted">Asset</span><span key="style" className="nodeMuted">Style</span>` : html`<span key="input" className="nodeMuted">Input</span>`}</div>
-      <div style=${{display:"flex", justifyContent:"space-between", gap:"10px"}}>
-        <div>
+      <div className="nodeHeaderRow">
+        <div className="nodeHeaderText">
           <div className="nodeTitle">${(data && data.title) || "Node"}</div>
-          <div className="nodeSub">${(data && data.subtitle) || ""}</div>
+          ${type === "ref" ? null : html`<div className="nodeSub">${(data && data.subtitle) || ""}</div>`}
           ${(data && data.badge) ? html`<div className="nodeMuted" style=${{marginTop:"4px"}}>${data.badge}</div>` : null}
         </div>
-        <div className="pill" style=${{borderColor: color, color: color}}>${String(type || "").toUpperCase()}</div>
+        ${type === "ref" ? null : html`<div className="pill" style=${{borderColor: color, color: color}}>${String(type || "").toUpperCase()}</div>`}
       </div>
-      ${isRef && data && (data.image_preview_url || data.image_data_url) ? html`<div style=${{marginTop:"8px", display:"flex", gap:"8px", alignItems:"center"}}><img src=${data.image_preview_url || data.image_data_url} style=${{width:"42px", height:"42px", objectFit:"cover", borderRadius:"10px", border:"1px solid rgba(255,255,255,.12)"}} /><div className="nodeMuted" style=${{lineHeight:"1.2"}}>${(data.image_name || "reference.png")}<br/><span style=${{opacity:.9}}>preview</span></div></div>` : null}
+      ${type === "ref" ? html`
+        <div className="referenceUploadNodeWrap nodrag">
+          <label className="referenceUploadTile" htmlFor=${refUploadInputId} title="Upload image">
+            ${data && (data.image_preview_url || data.image_data_url)
+              ? html`<img src=${data.image_preview_url || data.image_data_url} alt="" />`
+              : html`<span>+</span>`
+            }
+          </label>
+          <div className="referenceUploadMeta">
+            <div className="referenceUploadNodeLabel">Upload Image</div>
+            <div className="referenceUploadFileName">${(data && data.image_name) || "No File Chosen"}</div>
+          </div>
+          <input
+            className="referenceUploadNodeInput"
+            id=${refUploadInputId}
+            type="file"
+            accept="image/*"
+            onClick=${(e)=>e.stopPropagation()}
+            onChange=${(e)=>{ const file = e.target.files && e.target.files[0]; if(file) requestReferenceUpload(id, file); e.target.value = ""; }}
+          />
+        </div>
+      ` : null}
+      ${isRef && type !== "ref" && data && (data.image_preview_url || data.image_data_url) ? html`<div style=${{marginTop:"8px", display:"flex", gap:"8px", alignItems:"center"}}><img src=${data.image_preview_url || data.image_data_url} style=${{width:"42px", height:"42px", objectFit:"cover", borderRadius:"10px", border:"1px solid rgba(255,255,255,.12)"}} /><div className="nodeMuted" style=${{lineHeight:"1.2"}}>${(data.image_name || "reference.png")}<br/><span style=${{opacity:.9}}>preview</span></div></div>` : null}
       <${TagRow} data=${data} />
 
       ${showPromptBox ? html`
@@ -181,8 +634,17 @@ function BaseNode({ data, type, id }){
          </div>
       ` : null}
 
-      ${hasMultiInputs ? html`<${Handle} key="asset-handle" type="target" position=${Position.Top} id="asset" style=${{left:"30%"}} /><${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"70%"}} />` : html`<${Handle} key="in-handle" type="target" position=${Position.Top} id="in" />`}
-      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" />
+      ${hasMultiInputs ? html`<${Handle} key="asset-handle" type="target" position=${Position.Top} id="asset" style=${{left:"72px"}} /><${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"144px"}} />` : html`<${Handle} key="in-handle" type="target" position=${Position.Top} id="in" style=${{left:"108px"}} />`}
+      ${type === "ref" ? html`
+        <div className="referenceAnalyzeNodeWrap nodrag">
+          <button
+            className=${"referenceAnalyzeNodeBtn " + (refAnalyzed ? "active" : "")}
+            onClick=${(e)=>{ e.preventDefault(); e.stopPropagation(); requestReferenceAnalysis(id); }}
+            title=${refAnalyzed ? "Re-analyze and recascade" : "Analyze and activate downstream nodes"}
+          >${refAnalyzed ? "RE-ANALYZE" : "ANALYZE"}</button>
+        </div>
+      ` : null}
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{left:"108px"}} />
     </div>
   `;
 }
@@ -210,6 +672,9 @@ function NanoBananaNode({ data, id }){
 
   const slots = data.slots || Array(14).fill(null);
   const res = data.res || "HD";
+  const resultUri = data.result_data_url || data.result_uri;
+  const generating = data.generation_status === "running";
+  const locked = !!data.disabled;
 
   // Handler for file input clicking
   const onSlotClick = (index) => {
@@ -227,9 +692,23 @@ function NanoBananaNode({ data, id }){
   };
 
   return html`
-    <div className="nodeBox" style=${{borderColor: "#FFD700", width:"340px", padding:"0", overflow:"hidden", background:"#1a1a1a"}}>
+    <div className=${"nodeBox nodeNanoGrid " + (locked ? "nodeDisabled " : "")} style=${{borderColor: "#FFD700"}}>
+      ${slots.map((_slotImg, i) => {
+        const isHiFi = i < 6;
+        const color = isHiFi ? "#4ec9b0" : "#f4a261";
+        return html`
+          <${Handle}
+            key=${"slot-handle-" + i}
+            type="target"
+            position=${Position.Top}
+            id=${"in_" + i}
+            isConnectableStart=${true}
+            style=${{background:color, left:(36 + (i % 7) * 54) + "px", top:(144 + Math.floor(i / 7) * 54) + "px", width:"8px", height:"8px", transform:"translate(-50%, -50%)"}}
+          />
+        `;
+      })}
       
-      <div style=${{padding:"10px", background:"rgba(255, 215, 0, 0.1)", borderBottom:"1px solid #444"}}>
+      <div className="nanoHeader" style=${{background:"rgba(255, 215, 0, 0.1)", borderBottom:"1px solid #444"}}>
         <div style=${{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
           <div className="nodeTitle" style=${{color:"#FFD700", margin:"0"}}>NANO BANANA PRO</div>
           <div className="pill" style=${{color:"#000", background:"#FFD700", fontWeight:"800"}}>GEMINI 3</div>
@@ -237,27 +716,18 @@ function NanoBananaNode({ data, id }){
         <div className="nodeSub" style=${{marginTop:"4px"}}>14-Image Context Window</div>
       </div>
 
-      <div style=${{padding:"10px"}}>
-        <div style=${{display:"flex", justifyContent:"space-between", marginBottom:"6px", fontSize:"10px", fontWeight:"700"}}>
+      <div className="nanoSlotsPanel">
+        <div style=${{display:"flex", justifyContent:"space-between", marginBottom:"18px", fontSize:"10px", fontWeight:"700", height:"18px", alignItems:"center"}}>
           <span style=${{color:"#4ec9b0"}}>HIGH FIDELITY (1-6)</span>
           <span style=${{color:"#f4a261"}}>SUPPLEMENTARY (7-14)</span>
         </div>
         
-        <div style=${{display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:"4px"}}>
+        <div style=${{display:"grid", gridTemplateColumns:"repeat(7, 36px)", gap:"18px"}}>
           ${slots.map((slotImg, i) => {
             const isHiFi = i < 6;
             const color = isHiFi ? "#4ec9b0" : "#f4a261";
             return html`
               <div key=${i} style=${{position:"relative", width:"100%", aspectRatio:"1/1"}}>
-                <${Handle}
-                  key=${"slot-handle-" + i}
-                  type="target" 
-                  position=${Position.Top} 
-                  id=${"in_" + i} 
-                  isConnectableStart=${true}
-                  style=${{background:color, top:"-6px", width:"8px", height:"8px", left:"50%", transform:"translateX(-50%)"}} 
-                />
-                
                 <div 
                   onClick=${() => onSlotClick(i)}
                   title=${isHiFi ? `Slot ${i+1}: High Fidelity` : `Slot ${i+1}: Supplementary`}
@@ -280,7 +750,7 @@ function NanoBananaNode({ data, id }){
         </div>
       </div>
 
-      <div style=${{padding:"0 10px"}}>
+      <div style=${{padding:"0 18px"}}>
          <div style=${{fontSize:"10px", color:"#888", fontStyle:"italic", lineHeight:"1.4", marginBottom:"8px"}}>
           "Generate a cinematic wide shot. Use the character face from <span style=${{color:"#4ec9b0"}}>[img1]</span> and <span style=${{color:"#4ec9b0"}}>[img2]</span>. Apply lighting from <span style=${{color:"#4ec9b0"}}>[img3]</span>. Use composition of <span style=${{color:"#4ec9b0"}}>[img4]</span>. Loosely reference texture from <span style=${{color:"#f4a261"}}>[img5-14]</span>."
          </div>
@@ -296,7 +766,7 @@ function NanoBananaNode({ data, id }){
          ></textarea>
       </div>
 
-      <div style=${{padding:"10px", display:"flex", alignItems:"center", gap:"8px"}}>
+      <div style=${{padding:"18px", display:"flex", alignItems:"center", gap:"18px"}}>
         <div style=${{display:"flex", background:"#222", borderRadius:"6px", border:"1px solid #333", overflow:"hidden"}}>
           ${["HD","2K","4K"].map(r => html`
             <div
@@ -313,25 +783,24 @@ function NanoBananaNode({ data, id }){
         <button 
           className="btnSmall" 
           style=${{marginBottom:"0", textAlign:"center", background:"#FFD700", color:"#000", borderColor:"#bfa100", fontWeight:"800"}}
-          onClick=${() => {
-              // Mock Generation Logic: Set the result URI to the first image slot or a placeholder
-              updateData({ result_uri: slots.find(s=>s) || slots[0] || "https://placehold.co/600x400/1a1a1a/FFF?text=Generated+Image" });
-          }}
+          disabled=${generating || locked}
+          onClick=${(e) => { e.preventDefault(); e.stopPropagation(); requestNanoBananaGeneration(id); }}
+          title=${locked ? "Run Asset Reference analysis to activate this node" : "Generate with connected inputs"}
         >
-          GENERATE
+          ${locked ? "LOCKED" : (generating ? "GENERATING" : "GENERATE")}
         </button>
       </div>
 
-      ${data.result_uri ? html`
+      ${resultUri ? html`
         <div style=${{width:"100%", aspectRatio:"16/9", borderTop:"1px solid #333", position:"relative"}}>
-          <img src=${data.result_uri} style=${{width:"100%", height:"100%", objectFit:"contain", background:"#000"}} />
+          <img src=${resultUri} style=${{width:"100%", height:"100%", objectFit:"contain", background:"#000"}} />
           <div style=${{position:"absolute", bottom:"6px", right:"6px", background:"rgba(0,0,0,0.6)", padding:"2px 6px", borderRadius:"4px", fontSize:"10px", color:"#fff"}}>
-            Generated Result
+            ${data.result_model || "Generated Result"}
           </div>
         </div>
       ` : null}
 
-      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{background:"#FFD700"}} />
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{background:"#FFD700", left:"198px"}} />
     </div>
   `;
 }
@@ -566,12 +1035,7 @@ function clientPointFromEvent(event){
 }
 
 function clearReferenceAutoDisabledFlags(list){
-  return (list || []).map(node => {
-    if(!referenceNodeTypes.has(node.type) || !(node.data && node.data.disabled)) return node;
-    const data = Object.assign({}, node.data);
-    delete data.disabled;
-    return Object.assign({}, node, { data });
-  });
+  return list || [];
 }
 
 function App(){
@@ -663,6 +1127,8 @@ function App(){
   async function imageDataForNode(node){
     const data = (node && node.data) || {};
     if(data.image_data_url) return data.image_data_url;
+    if(data.result_data_url) return data.result_data_url;
+    if(data.result_uri && String(data.result_uri).startsWith("data:")) return data.result_uri;
     return await loadImageAsset(data.image_store_key);
   }
 
@@ -769,20 +1235,299 @@ function App(){
   const [clipboard, setClipboard] = React.useState(initial.clipboard);
   const [compiledJson, setCompiledJson] = React.useState(null);
   const [selectedEdgeIds, setSelectedEdgeIds] = React.useState([]);
-  const [jsonOpen, setJsonOpen] = React.useState(false);
+  const [jsonOpen, setJsonOpen] = React.useState(true);
+  const [inspectorOpen, setInspectorOpen] = React.useState(false);
+  const [snapEnabled, setSnapEnabled] = React.useState(true);
   const [debugConsoleOpen, setDebugConsoleOpen] = React.useState(false);
   const [smartConnect, setSmartConnect] = React.useState(null);
   const [openMenu, setOpenMenu] = React.useState(null);
+  const [edgeMenu, setEdgeMenu] = React.useState(null);
+  const [wirePatchEdgeId, setWirePatchEdgeId] = React.useState(null);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [projectName, setProjectName] = React.useState("Untitled.veo.json");
   const fileInputRef = React.useRef(null);
   const menuBarRef = React.useRef(null);
   const smartConnectRef = React.useRef(null);
   const smartConnectUsedRef = React.useRef(false);
+  const shiftKeyRef = React.useRef(false);
+  const connectionActiveRef = React.useRef(false);
+  const connectionBezierRef = React.useRef(false);
+  const wirePatchEdgeRef = React.useRef(null);
+  const libraryDragRef = React.useRef(null);
 
   React.useEffect(() => {
     smartConnectRef.current = smartConnect;
   }, [smartConnect]);
+
+  React.useEffect(() => {
+    function onKeyDown(event){
+      if(event.key === "Shift"){
+        shiftKeyRef.current = true;
+        if(connectionActiveRef.current) connectionBezierRef.current = true;
+      }
+    }
+    function onKeyUp(event){
+      if(event.key === "Shift") shiftKeyRef.current = false;
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
+  }, []);
+
+function connectionEdgeType(){
+  return (connectionBezierRef.current || shiftKeyRef.current) ? "default" : "smoothstep";
+}
+
+function edgeModeForType(type){
+  return !type || type === "default" ? "bezier" : "linear";
+}
+
+function edgeTypeForMode(mode){
+  return mode === "bezier" ? "default" : "straight";
+}
+
+function nodeApproxSize(node){
+  const data = (node && node.data) || {};
+  const style = (node && node.style) || {};
+  const measured = (node && node.measured) || {};
+  let width = Number(style.width || node?.width || measured.width || 216);
+  let height = Number(style.height || node?.height || measured.height || 144);
+  if(node && node.type === "model"){
+    width = Number(style.width || node.width || measured.width || 360);
+    height = Number(style.height || node.height || measured.height || 144);
+  }
+  if(node && isGeneratorType(node.type)){
+    width = Number(style.width || node.width || measured.width || 216);
+    height = Number(style.height || node.height || measured.height || 216);
+  }
+  if(node && node.type === "ref"){
+    width = Number(style.width || node.width || measured.width || 216);
+    height = Number(style.height || node.height || measured.height || 216);
+  }
+  if(node && node.type === "nano_banana"){
+    width = Number(style.width || node.width || measured.width || 396);
+    height = Number(style.height || node.height || measured.height || 432);
+  }
+  if(node && node.type === "clip"){
+    width = Number(style.width || node.width || measured.width || 560);
+    height = Number(style.height || node.height || measured.height || 430);
+  }
+  if(data.w) width = Number(data.w) || width;
+  if(data.h) height = Number(data.h) || height;
+  return { width, height };
+}
+
+function flowToScreenPoint(rfApi, point){
+  if(rfApi && typeof rfApi.flowToScreenPosition === "function"){
+    return rfApi.flowToScreenPosition(point);
+  }
+  const vp = rfApi && typeof rfApi.getViewport === "function" ? rfApi.getViewport() : { x:0, y:0, zoom:1 };
+  return {
+    x: point.x * (vp.zoom || 1) + (vp.x || 0),
+    y: point.y * (vp.zoom || 1) + (vp.y || 0)
+  };
+}
+
+function nodeMiddleScreenRect(node, rfApi){
+  if(!node || !node.position) return null;
+  const { width, height } = nodeApproxSize(node);
+  const left = node.position.x + width * 0.1;
+  const top = node.position.y + height * 0.1;
+  const right = node.position.x + width * 0.9;
+  const bottom = node.position.y + height * 0.9;
+  const p1 = flowToScreenPoint(rfApi, { x:left, y:top });
+  const p2 = flowToScreenPoint(rfApi, { x:right, y:bottom });
+  return {
+    l: Math.min(p1.x, p2.x),
+    t: Math.min(p1.y, p2.y),
+    r: Math.max(p1.x, p2.x),
+    b: Math.max(p1.y, p2.y),
+  };
+}
+
+function nodeMiddleFlowRect(node){
+  if(!node || !node.position) return null;
+  const { width, height } = nodeApproxSize(node);
+  return {
+    l: node.position.x + width * 0.1,
+    t: node.position.y + height * 0.1,
+    r: node.position.x + width * 0.9,
+    b: node.position.y + height * 0.9,
+  };
+}
+
+function pointInRect(point, rect){
+  return point.x >= rect.l && point.x <= rect.r && point.y >= rect.t && point.y <= rect.b;
+}
+
+function rectCenter(rect){
+  return { x:(rect.l + rect.r) / 2, y:(rect.t + rect.b) / 2 };
+}
+
+function distance(a, b){
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function edgePathElement(edgeId){
+  const edgeEls = document.querySelectorAll(".react-flow__edge");
+  for(const el of edgeEls){
+    const id = el && (el.getAttribute("data-id") || el.getAttribute("data-testid"));
+    if(el && (id === edgeId || id === `rf__edge-${edgeId}` || id === `react-flow__edge-${edgeId}`)){
+      return el.querySelector(".react-flow__edge-path");
+    }
+  }
+  const escapeCss = globalThis.CSS && globalThis.CSS.escape ? globalThis.CSS.escape : (value) => String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  const byClass = document.querySelector(`.react-flow__edge-${escapeCss(edgeId)} .react-flow__edge-path`);
+  if(byClass) return byClass;
+  return null;
+}
+
+function handleRatioForNode(node, handleId, kind){
+  const id = String(handleId || "");
+  if(kind === "source") return { x:.5, y:1 };
+  if(node && node.type === "model"){
+    const ratios = { start:.1, end:.3, asset1:.5, asset2:.7, style:.9 };
+    return { x: ratios[id] || .5, y:0 };
+  }
+  if(node && node.type === "nano_banana"){
+    const match = id.match(/^in_(\d+)$/);
+    if(match){
+      const index = Math.max(0, Math.min(13, Number(match[1])));
+      return { x: (36 + (index % 7) * 54) / 396, y:(144 + Math.floor(index / 7) * 54) / 432 };
+    }
+  }
+  if(id === "asset") return { x:1/3, y:0 };
+  if(id === "style") return { x:2/3, y:0 };
+  return { x:.5, y: kind === "target" ? 0 : 1 };
+}
+
+function nodeHandleFlowPoint(node, handleId, kind){
+  if(!node || !node.position) return null;
+  const size = nodeApproxSize(node);
+  const ratio = handleRatioForNode(node, handleId, kind);
+  return {
+    x: node.position.x + size.width * ratio.x,
+    y: node.position.y + size.height * ratio.y,
+  };
+}
+
+function sampledPolylineHit(rect, points){
+  const center = rectCenter(rect);
+  let best = Infinity;
+  let hit = false;
+  for(let p = 1; p < points.length; p += 1){
+    const a = points[p - 1];
+    const b = points[p];
+    for(let i = 0; i <= 24; i += 1){
+      const t = i / 24;
+      const point = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      if(pointInRect(point, rect)){
+        hit = true;
+        best = Math.min(best, distance(point, center));
+      }
+    }
+  }
+  return hit ? best : null;
+}
+
+function edgeFlowHitScore(edge, rect, nodes){
+  const source = nodes.find(n => n.id === edge.source);
+  const target = nodes.find(n => n.id === edge.target);
+  const start = nodeHandleFlowPoint(source, edge.sourceHandle || "out", "source");
+  const end = nodeHandleFlowPoint(target, edge.targetHandle || "in", "target");
+  if(!start || !end) return null;
+  if(edge.type === "smoothstep"){
+    const midY = start.y + (end.y - start.y) / 2;
+    return sampledPolylineHit(rect, [start, { x:start.x, y:midY }, { x:end.x, y:midY }, end]);
+  }
+  return sampledPolylineHit(rect, [start, end]);
+}
+
+function edgePatchInputHandle(node, edges){
+  if(!node || node.type === "clip") return null;
+  const occupied = (handle) => edges.some(e => e.target === node.id && String(e.targetHandle || "") === handle);
+  if(node.type === "nano_banana"){
+    for(let i = 0; i < 14; i += 1){
+      const handle = `in_${i}`;
+      if(!occupied(handle)) return handle;
+    }
+    return null;
+  }
+  if(node.type === "model"){
+    return ["start", "asset1", "asset2", "style", "end"].find(h => !occupied(h)) || null;
+  }
+  if(isGeneratorType(node.type)){
+    return ["asset", "style"].find(h => !occupied(h)) || null;
+  }
+  return occupied("in") ? null : "in";
+}
+
+function edgeLabelPatch(handle){
+  const label = labelForIndexedInput(handle);
+  return label ? {
+    label,
+    labelStyle: { fill: "#FFD700", fontWeight: 700, fontSize: 10 },
+    labelBgStyle: { fill: "rgba(0,0,0,0.6)", stroke: "#444", strokeWidth: 1 },
+    labelBgPadding: [6, 3],
+    labelBgBorderRadius: 999
+  } : {};
+}
+
+function setWirePatchPreview(candidate){
+  const nextKey = candidate ? `${candidate.nodeId}:${candidate.edgeId}` : "";
+  const prev = wirePatchEdgeRef.current;
+  const prevKey = prev ? `${prev.nodeId}:${prev.edgeId}` : "";
+  if(nextKey === prevKey) return;
+  wirePatchEdgeRef.current = candidate;
+  setWirePatchEdgeId(candidate ? candidate.edgeId : null);
+}
+
+function findWirePatchCandidate(node){
+  if(!node || !node.id || !edgePatchInputHandle(node, edges)) return null;
+  const rect = nodeMiddleScreenRect(node, rfApi);
+  const flowRect = nodeMiddleFlowRect(node);
+  if(!rect && !flowRect) return null;
+  const center = rect ? rectCenter(rect) : null;
+  let best = null;
+  for(const edge of edges){
+    if(edge.source === node.id || edge.target === node.id) continue;
+    if(!nodes.some(n => n.id === edge.source) || !nodes.some(n => n.id === edge.target)) continue;
+    const path = edgePathElement(edge.id);
+    let score = null;
+    if(path && typeof path.getTotalLength === "function" && rect){
+      try{
+        const length = path.getTotalLength();
+        const matrix = path.getScreenCTM && path.getScreenCTM();
+        if(length && matrix){
+          let domScore = Infinity;
+          let hit = false;
+          for(let i = 0; i <= 40; i += 1){
+            const local = path.getPointAtLength((length * i) / 40);
+            const point = {
+              x: local.x * matrix.a + local.y * matrix.c + matrix.e,
+              y: local.x * matrix.b + local.y * matrix.d + matrix.f
+            };
+            if(pointInRect(point, rect)){
+              hit = true;
+              domScore = Math.min(domScore, distance(point, center));
+            }
+          }
+          if(hit) score = domScore;
+        }
+      }catch(err){}
+    }
+    if(score === null && flowRect){
+      score = edgeFlowHitScore(edge, flowRect, nodes);
+    }
+    if(score !== null && (!best || score < best.score)){
+        best = { edgeId: edge.id, nodeId: node.id, score };
+    }
+  }
+  return best;
+}
 
   // ALT/Option = pan with left mouse (keeps normal middle/right panning too)
   ;
@@ -879,6 +1624,9 @@ function App(){
       if(menuBarRef.current && !menuBarRef.current.contains(e.target)){
         setOpenMenu(null);
       }
+      if(!(e.target && e.target.closest && e.target.closest(".edgeContextMenu"))){
+        setEdgeMenu(null);
+      }
     }
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
@@ -901,6 +1649,18 @@ function App(){
       if(key === "f11"){
         e.preventDefault();
         toggleFullscreen();
+        return;
+      }
+
+      if(isTextEditingTarget(e) && !mod) return;
+
+      if(key === "s" && !mod){
+        e.preventDefault();
+        setSnapEnabled(prev => {
+          const next = !prev;
+          logLine("INFO", `${nowTime()} Grid snapping ${next ? "enabled" : "disabled"}.`);
+          return next;
+        });
         return;
       }
 
@@ -1038,6 +1798,7 @@ function App(){
           }));
         }
       }
+      setWirePatchPreview(findWirePatchCandidate(node));
       const now = Date.now();
       const hist = dragHistoryRef.current[node.id] || [];
       hist.push({ t: now, x: node.position?.x || 0 });
@@ -1059,7 +1820,47 @@ function App(){
         dragHistoryRef.current[node.id] = [];
       }
     }catch(err){}
-  }, [setEdges]);
+  }, [setEdges, nodes, edges, rfApi]);
+
+  const onNodeDragStop = React.useCallback((_e, node) => {
+    if(!node || !node.id){
+      setWirePatchPreview(null);
+      return;
+    }
+    const patchCandidate = wirePatchEdgeRef.current && wirePatchEdgeRef.current.nodeId === node.id
+      ? wirePatchEdgeRef.current
+      : null;
+    if(snapEnabled){
+      const snapped = snapFlowPosition(node.position, true);
+      if(snapped && (snapped.x !== node.position?.x || snapped.y !== node.position?.y)){
+        setNodes(nds => nds.map(n => n.id === node.id ? Object.assign({}, n, { position: snapped }) : n));
+      }
+    }
+    if(patchCandidate){
+      const edgeToPatch = edges.find(edge => edge.id === patchCandidate.edgeId);
+      const inputHandle = edgePatchInputHandle(node, edges);
+      if(edgeToPatch && inputHandle){
+        const firstEdge = Object.assign({
+          id: makeId("e"),
+          source: edgeToPatch.source,
+          sourceHandle: edgeToPatch.sourceHandle,
+          target: node.id,
+          targetHandle: inputHandle,
+          type: edgeToPatch.type || defaultEdgeOptions.type,
+        }, edgeLabelPatch(inputHandle));
+        const secondEdge = Object.assign({}, edgeToPatch, {
+          id: makeId("e"),
+          source: node.id,
+          sourceHandle: "out",
+        });
+        setEdges(eds => eds.flatMap(edge => edge.id === edgeToPatch.id ? [firstEdge, secondEdge] : [edge]));
+        setSelectedEdgeIds([]);
+        setSelectedIds([node.id]);
+        logLine("INFO", `${nowTime()} Auto-patched ${node.id} into wire ${edgeToPatch.id}.`);
+      }
+    }
+    setWirePatchPreview(null);
+  }, [setNodes, setEdges, edges, snapEnabled]);
 
   React.useEffect(() => {
     try{
@@ -1075,6 +1876,20 @@ function App(){
   const modelNode = React.useMemo(() => nodes.find(n => n.type==="model") || null, [nodes]);
   const modelProps = (modelNode && modelNode.data) || defaultPropsFor("model");
   const caps = MODEL_CATALOG[modelProps.model_ver] || MODEL_CATALOG["Veo 3.1 Quality"];
+  const primaryRefNode = React.useMemo(() => nodes.find(n => n.type === "ref") || null, [nodes]);
+  const primaryRefAnalysis = primaryRefNode && isAnalysisActivated(primaryRefNode.data && primaryRefNode.data.analysis) ? primaryRefNode.data.analysis : null;
+  const referenceGateReady = !primaryRefNode || !!primaryRefAnalysis;
+  const renderedEdges = React.useMemo(() => edges.map(edge => {
+    if(edge.id !== wirePatchEdgeId) return edge;
+    return Object.assign({}, edge, {
+      animated: true,
+      style: Object.assign({}, edge.style || {}, {
+        stroke: WIRE_PATCH_COLOR,
+        strokeWidth: 3,
+        filter: `drop-shadow(0 0 7px ${WIRE_PATCH_COLOR})`
+      })
+    });
+  }), [edges, wirePatchEdgeId]);
 
   const finalizeSmartConnection = React.useCallback((pointOverride) => {
     const smart = smartConnectRef.current;
@@ -1085,10 +1900,11 @@ function App(){
     const flowPoint = rfApi.screenToFlowPosition(point);
     const id = makeId(option.type);
     const label = labelForIndexedInput(smart.targetHandle);
+    const nodePosition = snapFlowPosition({ x: flowPoint.x - 85, y: flowPoint.y - 44 }, snapEnabled);
     const node = {
       id,
       type: option.type,
-      position: { x: flowPoint.x - 85, y: flowPoint.y - 44 },
+      position: nodePosition,
       data: Object.assign({}, defaultPropsFor(option.type), { title: option.title })
     };
     const edge = {
@@ -1097,7 +1913,7 @@ function App(){
       sourceHandle: "out",
       target: smart.targetNodeId,
       targetHandle: smart.targetHandle,
-      type: "smoothstep",
+      type: connectionEdgeType(),
       label: label || undefined,
       labelStyle: label ? { fill: "#FFD700", fontWeight: 700, fontSize: 10 } : undefined,
       labelBgStyle: label ? { fill: "rgba(0,0,0,0.6)", stroke: "#444", strokeWidth: 1 } : undefined,
@@ -1110,7 +1926,7 @@ function App(){
     setSelectedIds([id]);
     setSmartConnect(null);
     logLine("INFO", `${nowTime()} Smart connect: added ${option.title} to ${label || smart.targetHandle}.`);
-  }, [rfApi, setEdges, setNodes]);
+  }, [rfApi, setEdges, setNodes, snapEnabled]);
 
   React.useEffect(() => {
     if(!smartConnect) return;
@@ -1151,6 +1967,8 @@ function App(){
 
   const onConnectStart = React.useCallback((event, params) => {
     smartConnectUsedRef.current = false;
+    connectionActiveRef.current = true;
+    connectionBezierRef.current = !!(event && event.shiftKey) || shiftKeyRef.current;
     const handleType = String((params && params.handleType) || "");
     const targetNodeId = params && params.nodeId;
     const targetHandle = params && params.handleId;
@@ -1183,6 +2001,10 @@ function App(){
 
   const onConnectEnd = React.useCallback((event) => {
     const smart = smartConnectRef.current;
+    window.setTimeout(() => {
+      connectionActiveRef.current = false;
+      connectionBezierRef.current = false;
+    }, 0);
     if(!smart || smartConnectUsedRef.current) return;
     const point = clientPointFromEvent(event);
     const moved = Math.hypot(point.x - smart.start.x, point.y - smart.start.y);
@@ -1207,7 +2029,7 @@ function App(){
     const label = labelForIndexedInput(th);
     setEdges((eds) => addEdge({ 
       ...conn, 
-      type: "smoothstep",
+      type: connectionEdgeType(),
       label: label || undefined,
       labelStyle: label ? { fill: "#FFD700", fontWeight: 700, fontSize: 10 } : undefined,
       labelBgStyle: label ? { fill: "rgba(0,0,0,0.6)", stroke: "#444", strokeWidth: 1 } : undefined,
@@ -1217,19 +2039,32 @@ function App(){
     setSmartConnect(null);
   }, [nodes, edges, caps, setEdges, showToast]);
 
+  const onEdgeContextMenu = React.useCallback((event, edge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if(!edge || !edge.id) return;
+    setSelectedEdgeIds([edge.id]);
+    setSelectedIds([]);
+    setEdgeMenu({
+      edgeId: edge.id,
+      x: event.clientX,
+      y: event.clientY
+    });
+  }, []);
+
+  function setEdgeMode(edgeId, mode){
+    const label = mode === "bezier" ? "Bezier" : "Linear";
+    setEdges(eds => eds.map(edge => edge.id === edgeId ? Object.assign({}, edge, { type: edgeTypeForMode(mode) }) : edge));
+    setEdgeMenu(null);
+    logLine("INFO", `${nowTime()} Edge ${edgeId} set to ${label}.`);
+  }
+
   const onSelectionChange = React.useCallback((sel) => {
     const ids = ((sel && sel.nodes) ? sel.nodes : []).map(n => n.id);
     setSelectedIds(ids);
   }, []);
 
-  const onDragStart = (event, itemKey) => { event.dataTransfer.setData("application/veo-node", itemKey); event.dataTransfer.effectAllowed = "move"; };
-  const onDragOver = (event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; };
-  const onDrop = (event) => {
-    event.preventDefault();
-    const key = event.dataTransfer.getData("application/veo-node");
-    if(!key) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const position = rfApi.screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+  function libraryNodeSpec(key){
     let type = key;
     let dataPatch = {};
     if(key && key.indexOf("param_") === 0) type = "param";
@@ -1238,6 +2073,84 @@ function App(){
     if(key==="param_res_hd") dataPatch = { title:"Res=HD", subtitle:"Param override", param_key:"res", param_val:"HD" };
     if(key==="param_focal_35") dataPatch = { title:"Focal=35mm", subtitle:"Param override", param_key:"focal_length", param_val:"35mm" };
     if(key==="param_ap_f14") dataPatch = { title:"Aperture=f/1.4", subtitle:"Param override", param_key:"aperture", param_val:"f/1.4" };
+    return { type, dataPatch };
+  }
+
+  function canvasFlowPointFromDragEvent(event){
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return rfApi.screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+  }
+
+  function virtualLibraryNodeForEvent(event, key){
+    if(!key) return null;
+    const spec = libraryNodeSpec(key);
+    if(!spec.type || spec.type === "clip") return null;
+    const point = canvasFlowPointFromDragEvent(event);
+    const size = nodeApproxSize({ type: spec.type });
+    return {
+      id: "__library_drag_preview__",
+      type: spec.type,
+      position: {
+        x: point.x - size.width / 2,
+        y: point.y - size.height / 2
+      }
+    };
+  }
+
+  function patchEdgeWithNode(edgeToPatch, node, inputHandle){
+    if(!edgeToPatch || !node || !inputHandle) return false;
+    const firstEdge = Object.assign({
+      id: makeId("e"),
+      source: edgeToPatch.source,
+      sourceHandle: edgeToPatch.sourceHandle,
+      target: node.id,
+      targetHandle: inputHandle,
+      type: edgeToPatch.type || defaultEdgeOptions.type,
+    }, edgeLabelPatch(inputHandle));
+    const secondEdge = Object.assign({}, edgeToPatch, {
+      id: makeId("e"),
+      source: node.id,
+      sourceHandle: "out",
+    });
+    setEdges(eds => eds.flatMap(edge => edge.id === edgeToPatch.id ? [firstEdge, secondEdge] : [edge]));
+    setSelectedEdgeIds([]);
+    setSelectedIds([node.id]);
+    logLine("INFO", `${nowTime()} Auto-patched ${node.id} into wire ${edgeToPatch.id}.`);
+    return true;
+  }
+
+  const onDragStart = (event, itemKey) => {
+    libraryDragRef.current = { key: itemKey };
+    event.dataTransfer.setData("application/veo-node", itemKey);
+    event.dataTransfer.effectAllowed = "move";
+  };
+  const onDragEnd = () => {
+    libraryDragRef.current = null;
+    setWirePatchPreview(null);
+  };
+  const onDragOver = (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const key = libraryDragRef.current && libraryDragRef.current.key;
+    const virtualNode = virtualLibraryNodeForEvent(event, key);
+    setWirePatchPreview(virtualNode ? findWirePatchCandidate(virtualNode) : null);
+  };
+  const onDrop = (event) => {
+    event.preventDefault();
+    const key = event.dataTransfer.getData("application/veo-node") || (libraryDragRef.current && libraryDragRef.current.key);
+    libraryDragRef.current = null;
+    if(!key) return;
+    const spec = libraryNodeSpec(key);
+    const type = spec.type;
+    const dataPatch = spec.dataPatch;
+    const dropPoint = canvasFlowPointFromDragEvent(event);
+    const virtualNode = virtualLibraryNodeForEvent(event, key);
+    const patchCandidate = virtualNode ? findWirePatchCandidate(virtualNode) : null;
+    const patchEdge = patchCandidate ? edges.find(edge => edge.id === patchCandidate.edgeId) : null;
+    const size = nodeApproxSize({ type });
+    const position = patchEdge
+      ? snapFlowPosition({ x: dropPoint.x - size.width / 2, y: dropPoint.y - size.height / 2 }, snapEnabled)
+      : snapFlowPosition(dropPoint, snapEnabled);
 if(type==="clip"){
       const gid = makeId("clip");
       const d = defaultPropsFor("clip");
@@ -1250,18 +2163,96 @@ if(type==="clip"){
       setNodes(nds => nds.concat([groupNode]));
       setSelectedIds([gid]);
       logLine("INFO", `${nowTime()} Added clip boundary ${d.clip_name} (${gid})`);
+      setWirePatchPreview(null);
       return;
     }
     const id = makeId(type);
     const base = defaultPropsFor(type);
     const palette = PALETTE.find(p => p.key === key);
     const n = { id, type, position, data: Object.assign({}, base, dataPatch, { tags: (palette && palette.tags) ? palette.tags : (base.tags || []) }) };
-    setNodes(nds => nds.concat([n]));
+    if(type === "ref"){
+      setNodes(nds => nds.map(existing => (
+        isCascadeTargetType(existing.type)
+          ? Object.assign({}, existing, { data: Object.assign({}, existing.data, { disabled:true, cascade_source_ref_id:id, cascade_prompt:"", cascade_identity_profile:null, cascade_warnings:["Waiting for Asset Reference analysis."] }) })
+          : existing
+      )).concat([n]));
+    } else {
+      setNodes(nds => {
+        const shouldGate = type && isCascadeTargetType(type) && nds.some(existing => existing.type === "ref" && !isAnalysisActivated(existing.data && existing.data.analysis));
+        const node = shouldGate
+          ? Object.assign({}, n, { data: Object.assign({}, n.data, { disabled:true, cascade_warnings:["Waiting for Asset Reference analysis."] }) })
+          : n;
+        return nds.concat([node]);
+      });
+    }
+    if(patchEdge){
+      const inputHandle = edgePatchInputHandle(n, edges);
+      if(inputHandle) patchEdgeWithNode(patchEdge, n, inputHandle);
+    }
+    setWirePatchPreview(null);
     setSelectedIds([id]);
-    logLine("INFO", `${nowTime()} Dropped ${type} node ${id}`);
+    if(!patchEdge) logLine("INFO", `${nowTime()} Dropped ${type} node ${id}`);
   };
 
   function updateNode(id, patch){ setNodes(nds => nds.map(n => (n.id === id ? Object.assign({}, n, { data: Object.assign({}, n.data, patch) }) : n))); }
+
+  function setReferenceGatePending(refId, patch){
+    setNodes(nds => nds.map(n => {
+      if(n.id === refId){
+        return Object.assign({}, n, { data: Object.assign({}, n.data, patch || {}, { analysis_status:"pending", activated_at:null }) });
+      }
+      if(isCascadeTargetType(n.type)){
+        return Object.assign({}, n, {
+          data: Object.assign({}, n.data, {
+            disabled: true,
+            cascade_source_ref_id: refId,
+            cascade_prompt: "",
+            cascade_identity_profile: null,
+            cascade_warnings: ["Waiting for Asset Reference analysis."]
+          })
+        });
+      }
+      return n;
+    }));
+  }
+
+  function applyReferenceAnalysis(refId, analysis, options){
+    const quiet = !!(options && options.quiet);
+    const active = isAnalysisActivated(analysis);
+    setNodes(nds => nds.map(n => {
+      if(n.id === refId){
+        return Object.assign({}, n, {
+          data: Object.assign({}, n.data, {
+            analysis,
+            analysis_status: active ? "analyzed" : "pending",
+            activated_at: active ? (analysis.analyzed_at || new Date().toISOString()) : null
+          })
+        });
+      }
+      if(isCascadeTargetType(n.type)){
+        const cascadePrompt = active ? nodeCascadePrompt(analysis, n.type) : "";
+        return Object.assign({}, n, {
+          data: Object.assign({}, n.data, {
+            disabled: !active,
+            cascade_source_ref_id: refId,
+            cascade_prompt: cascadePrompt,
+            cascade_identity_profile: active ? (analysis.identity_profile || null) : null,
+            cascade_warnings: active ? [] : ["Waiting for Asset Reference analysis."],
+            tags: active ? uniqueTags(n.data && n.data.tags, ["analysis-linked"]) : (n.data && n.data.tags) || []
+          })
+        });
+      }
+      return n;
+    }));
+    if(!quiet){
+      logLine(active ? "INFO" : "WARN", `${nowTime()} Asset Reference gateway ${active ? "activated" : "locked"}.`);
+    }
+  }
+
+  function clearReferenceAnalysis(refId){
+    setReferenceGatePending(refId, { analysis:null, analysis_status:"pending", activated_at:null });
+    logLine("WARN", `${nowTime()} Asset Reference analysis cleared; downstream generator nodes locked.`);
+  }
 
   const capacityWarningRef = React.useRef("");
   React.useEffect(() => {
@@ -1275,84 +2266,256 @@ if(type==="clip"){
   }, [nodes, edges, caps, modelProps.model_ver, showToast]);
 
   const creditsAndCost = React.useMemo(() => {
-    const seconds = Number(modelProps.seconds_per_clip || 8);
-    const audioEnabled = !!(modelProps.audio_enabled && caps.supports_audio);
-    const audioMult = audioEnabled ? 1.1 : 1.0;
-    const usdPerCredit = Number(modelProps.usd_per_credit || 0.01);
-    const usdToLocal = Number(modelProps.usd_to_local || 1.0);
-    const currency = modelProps.currency || "USD";
-    let totalCredits = 0;
-    const breakdown = [];
-    nodes.forEach(n => {
-      if(isGeneratorType(n.type)){
-        const ov = incomingParams(n.id, nodes, edges);
-        const batch = Number((ov.batch !== undefined ? ov.batch : (n.data && n.data.batch)) || 1);
-        const res = String((ov.res !== undefined ? ov.res : (n.data && n.data.res)) || "HD");
-        const rm = (RES_MULT[res] !== undefined) ? RES_MULT[res] : 1.0;
-        const nodeCredits = batch * seconds * caps.credits_per_sec_hd * rm * audioMult;
-        totalCredits += nodeCredits;
-        breakdown.push({ name: (n.data && n.data.title) || n.type, credits: nodeCredits });
-      }
-    });
-    const totalUsd = totalCredits * usdPerCredit;
-    const totalLocal = totalUsd * usdToLocal;
-    return { model: modelProps.model_ver, audio_enabled: audioEnabled, seconds, total_credits: totalCredits, usd_per_credit: usdPerCredit, total_usd: totalUsd, currency, total_local: totalLocal, breakdown };
-  }, [nodes, edges, modelProps, caps]);
+    return estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady);
+  }, [nodes, edges, modelProps, caps, referenceGateReady]);
 
-  async function onRefImageChange(file){
-    if(!file || !selectedPrimary || selectedPrimary.type !== "ref") return;
+  async function onRefImageChange(file, refId){
+    const refNode = refId ? nodes.find(n => n.id === refId) : selectedPrimary;
+    if(!file || !refNode || refNode.type !== "ref") return;
     const dataUrl = await new Promise(resolve => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.readAsDataURL(file);
     });
-    const imageKey = `ref:${selectedPrimary.id}`;
+    const imageKey = `ref:${refNode.id}`;
     let previewUrl = dataUrl;
     try{
       await saveImageAsset(imageKey, dataUrl);
       previewUrl = await makeImagePreview(dataUrl, 180);
-      updateNode(selectedPrimary.id, { image_store_key: imageKey, image_preview_url: previewUrl, image_data_url: null, image_name: file.name });
+      setReferenceGatePending(refNode.id, { image_store_key: imageKey, image_preview_url: previewUrl, image_data_url: null, image_name: file.name, analysis:null, activated_at:null });
+      setSelectedIds([refNode.id]);
       logLine("INFO", `${nowTime()} Stored reference image: ${file.name}`);
     }catch(err){
-      updateNode(selectedPrimary.id, { image_store_key: null, image_preview_url: previewUrl, image_data_url: dataUrl, image_name: file.name });
+      setReferenceGatePending(refNode.id, { image_store_key: null, image_preview_url: previewUrl, image_data_url: dataUrl, image_name: file.name, analysis:null, activated_at:null });
+      setSelectedIds([refNode.id]);
       logLine("WARN", `${nowTime()} IndexedDB unavailable; image will stay in memory for this session only.`);
     }
   }
 
-  async function runRefAnalysis(){
-    if(!selectedPrimary || selectedPrimary.type !== "ref") return;
-    const imageData = await imageDataForNode(selectedPrimary);
+  async function runRefAnalysis(refId){
+    const refNode = refId ? nodes.find(n => n.id === refId) : selectedPrimary;
+    if(!refNode || refNode.type !== "ref") return;
+    const imageData = await imageDataForNode(refNode);
     if(!imageData){ logLine("WARN", `${nowTime()} Run Analysis: no image uploaded.`); return; }
-    logLine("INFO", `${nowTime()} Running Nano Banana Pro analysis...`);
-    const analysis = await nanoBananaAnalyze(imageData);
-    updateNode(selectedPrimary.id, { analysis: analysis });
-    logLine("INFO", `${nowTime()} Analysis complete.`);
+    const config = window.__VEO_CONFIG__ || {};
+    if(!config.has_api_key){
+      logLine("ERROR", `${nowTime()} Missing API key. Set GEMINI_API_KEY in access.env.`);
+      return;
+    }
+    logLine("INFO", `${nowTime()} Running Gemini asset analysis...`);
+    updateNode(refNode.id, { analysis_status:"running" });
+    try{
+      const response = await proxyJson("/api/gemini/analyze", {
+        image_data_url: imageData,
+        image_name: refNode.data && refNode.data.image_name,
+        node_id: refNode.id
+      });
+      if(!response.analysis) throw new Error("No analysis JSON returned.");
+      applyReferenceAnalysis(refNode.id, response.analysis);
+      setSelectedIds([refNode.id]);
+      setJsonOpen(true);
+      logLine("INFO", `${nowTime()} Analysis complete via ${response.model || "Gemini"}.`);
+    }catch(err){
+      updateNode(refNode.id, { analysis_status:"pending" });
+      logLine("ERROR", `${nowTime()} Analysis failed: ${String(err && (err.message||err))}`);
+    }
   }
+
+  async function collectNanoBananaInputs(nanoNode){
+    const slots = (nanoNode.data && nanoNode.data.slots) || Array(14).fill(null);
+    const images = [];
+    for(let i = 0; i < 14; i += 1){
+      const handleId = `in_${i}`;
+      const edge = edges.find(e => e.target === nanoNode.id && String(e.targetHandle || "") === handleId);
+      const role = i < 6 ? "high_fidelity" : "supplementary";
+      if(edge){
+        const source = nodes.find(n => n.id === edge.source);
+        const dataUrl = source ? await imageDataForNode(source).catch(() => null) : null;
+        if(dataUrl){
+          images.push({
+            slot: i + 1,
+            label: `${source.data && source.data.title ? source.data.title : source.type} -> slot ${i + 1}`,
+            role,
+            source_node_id: source.id,
+            source_type: source.type,
+            data_url: dataUrl
+          });
+        }
+      } else if(slots[i]){
+        images.push({
+          slot: i + 1,
+          label: `Manual slot ${i + 1}`,
+          role,
+          source_node_id: null,
+          source_type: "manual_upload",
+          data_url: slots[i]
+        });
+      }
+    }
+    return images;
+  }
+
+  function buildNanoBananaPrompt(nanoNode, images){
+    const activeRefNode = nodes.find(n => n.type === "ref" && isAnalysisActivated(n.data && n.data.analysis));
+    const refAnalysis = activeRefNode && activeRefNode.data ? activeRefNode.data.analysis : null;
+    const incomingEdges = edges.filter(e => e.target === nanoNode.id);
+    const upstreamLines = incomingEdges.map((edge) => {
+      const source = nodes.find(n => n.id === edge.source);
+      if(!source) return null;
+      const sourceData = source.data || {};
+      if(source.type === "ref" && isAnalysisActivated(sourceData.analysis)){
+        return `Connected ${edge.targetHandle}: ${sourceData.analysis.identity_profile && sourceData.analysis.identity_profile.summary ? sourceData.analysis.identity_profile.summary : referenceDescriptionFor(sourceData.analysis, "asset")}`;
+      }
+      if(source.type === "nano_banana"){
+        return `Connected ${edge.targetHandle}: use generated image output from ${sourceData.title || source.id}${sourceData.result_text ? `. Prior generation note: ${sourceData.result_text}` : ""}.`;
+      }
+      const prompt = [sourceData.cascade_prompt, sourceData.prompt].filter(Boolean).join(" ");
+      return prompt ? `Connected ${edge.targetHandle}: ${sourceData.title || source.type}: ${prompt}` : `Connected ${edge.targetHandle}: ${sourceData.title || source.type}.`;
+    }).filter(Boolean);
+    const cascadePrompt = (nanoNode.data && nanoNode.data.cascade_prompt) || nodeCascadePrompt(refAnalysis, "nano_banana");
+    const userPrompt = (nanoNode.data && nanoNode.data.prompt) || "";
+    const imageLines = images.map(img => `Input ${img.slot} (${img.role}): ${img.label}`).join("\n");
+    return [
+      cascadePrompt,
+      refAnalysis && refAnalysis.identity_profile ? `Identity profile: ${refAnalysis.identity_profile.summary}` : "",
+      upstreamLines.length ? "Connected upstream context:\n" + upstreamLines.join("\n") : "",
+      imageLines ? "Image inputs:\n" + imageLines : "",
+      userPrompt ? `User prompt: ${userPrompt}` : "User prompt: Generate the most coherent image implied by the connected references.",
+      `Requested output: ${String((nanoNode.data && nanoNode.data.res) || "HD")} still image, ${String((nanoNode.data && nanoNode.data.aspect) || "16:9")} composition.`
+    ].filter(Boolean).join("\n\n");
+  }
+
+  async function runNanoBananaGeneration(nodeId){
+    const nanoNode = nodes.find(n => n.id === nodeId);
+    if(!nanoNode || nanoNode.type !== "nano_banana") return;
+    if(nanoNode.data && nanoNode.data.disabled){
+      logLine("WARN", `${nowTime()} Nano Banana Pro is locked. Run Asset Reference analysis first.`);
+      return;
+    }
+    const config = window.__VEO_CONFIG__ || {};
+    if(!config.has_api_key){
+      logLine("ERROR", `${nowTime()} Missing API key. Set GEMINI_API_KEY in access.env.`);
+      return;
+    }
+    setNodes(nds => nds.map(n => n.id === nodeId ? Object.assign({}, n, { data: Object.assign({}, n.data, { generation_status:"running", generation_error:null }) }) : n));
+    try{
+      const images = await collectNanoBananaInputs(nanoNode);
+      const prompt = buildNanoBananaPrompt(nanoNode, images);
+      logLine("INFO", `${nowTime()} Submitting Nano Banana Pro generation with ${images.length} image input(s)...`);
+      const response = await proxyJson("/api/gemini/image", {
+        model: (config.gemini_models && config.gemini_models.image) || "gemini-3-pro-image",
+        prompt,
+        images,
+        resolution: nanoNode.data && nanoNode.data.res,
+        aspect_ratio: nanoNode.data && nanoNode.data.aspect
+      });
+      if(!response.image_data_url) throw new Error("No image returned.");
+      setNodes(nds => nds.map(n => n.id === nodeId ? Object.assign({}, n, {
+        data: Object.assign({}, n.data, {
+          result_data_url: response.image_data_url,
+          result_uri: response.image_data_url,
+          result_text: response.text || "",
+          result_model: response.model || "Nano Banana Pro",
+          generation_status:"idle",
+          generation_error:null,
+          last_generated_at: new Date().toISOString(),
+          last_inputs_used: response.inputs_used
+        })
+      }) : n));
+      setSelectedIds([nodeId]);
+      logLine("INFO", `${nowTime()} Nano Banana Pro image generated via ${response.model || "Gemini"}.`);
+    }catch(err){
+      setNodes(nds => nds.map(n => n.id === nodeId ? Object.assign({}, n, { data: Object.assign({}, n.data, { generation_status:"error", generation_error:String(err && (err.message||err)) }) }) : n));
+      logLine("ERROR", `${nowTime()} Nano Banana Pro failed: ${String(err && (err.message||err))}`);
+    }
+  }
+
+  React.useEffect(() => {
+    function onReferenceUpload(event){
+      const detail = event && event.detail;
+      if(detail && detail.nodeId && detail.file) onRefImageChange(detail.file, detail.nodeId);
+    }
+    function onReferenceAnalyze(event){
+      const nodeId = event && event.detail && event.detail.nodeId;
+      if(nodeId) runRefAnalysis(nodeId);
+    }
+    function onNanoGenerate(event){
+      const nodeId = event && event.detail && event.detail.nodeId;
+      if(nodeId) runNanoBananaGeneration(nodeId);
+    }
+    window.addEventListener("stage:upload-reference", onReferenceUpload);
+    window.addEventListener("stage:analyze-reference", onReferenceAnalyze);
+    window.addEventListener("stage:nano-generate", onNanoGenerate);
+    return () => {
+      window.removeEventListener("stage:upload-reference", onReferenceUpload);
+      window.removeEventListener("stage:analyze-reference", onReferenceAnalyze);
+      window.removeEventListener("stage:nano-generate", onNanoGenerate);
+    };
+  }, [nodes, edges, selectedPrimary]);
 
   const liveFeed = React.useMemo(() => {
     const payload = compilePayloadMultiClip({ quiet: true });
-    return payload ? { subtitle: `${payload.clips.length} compiled clip(s)`, payload } : null;
+    return payload ? { subtitle: payload.ready ? `${payload.clips.length} compiled clip(s)` : "Gateway locked", payload } : null;
   }, [nodes, edges, modelProps, caps, creditsAndCost]);
+
+  const selectedAnalysis = selectedPrimary && selectedPrimary.type === "ref" ? (selectedPrimary.data && selectedPrimary.data.analysis) : null;
+  const showingAnalysisJson = !!(selectedPrimary && selectedPrimary.type === "ref" && selectedAnalysis);
+  const analysisDraftKey = showingAnalysisJson ? `${selectedPrimary.id}:${selectedAnalysis.analyzed_at || selectedPrimary.data.analysis_status || "analysis"}` : "";
+  const [analysisJsonDraft, setAnalysisJsonDraft] = React.useState("");
+  const [analysisJsonError, setAnalysisJsonError] = React.useState("");
+
+  React.useEffect(() => {
+    if(showingAnalysisJson){
+      setAnalysisJsonDraft(JSON.stringify(selectedAnalysis, null, 2));
+      setAnalysisJsonError("");
+    } else {
+      setAnalysisJsonDraft("");
+      setAnalysisJsonError("");
+    }
+  }, [analysisDraftKey, showingAnalysisJson]);
+
+  function onAnalysisJsonEdit(value){
+    if(!selectedPrimary || selectedPrimary.type !== "ref") return;
+    setAnalysisJsonDraft(value);
+    try{
+      const parsed = JSON.parse(value);
+      setAnalysisJsonError("");
+      if(isAnalysisActivated(parsed)){
+        applyReferenceAnalysis(selectedPrimary.id, parsed, { quiet:true });
+      } else {
+        setReferenceGatePending(selectedPrimary.id, { analysis:parsed, analysis_status:"pending" });
+      }
+    }catch(err){
+      setAnalysisJsonError(String(err && err.message || err));
+    }
+  }
 
   function compilePayloadMultiClip(options){
     const quiet = !!(options && options.quiet);
     const refNode = nodes.find(n => n.type === "ref") || null;
+    const refAnalysis = refNode && isAnalysisActivated(refNode.data && refNode.data.analysis) ? refNode.data.analysis : null;
+    const gateBlocked = !!(refNode && !refAnalysis);
     const modelId = caps.id;
     const secondsDefault = Number(modelProps.seconds_per_clip || 8);
     const audio_enabled = !!(modelProps.audio_enabled && caps.supports_audio);
     let reference_images = [];
     let identity_first_frame = null;
-    if(refNode){
+    const payloadWarnings = [];
+    if(gateBlocked){
+      payloadWarnings.push("Asset Reference gateway is locked. Run Analysis to activate downstream generator nodes.");
+      if(!quiet) logLine("WARN", `${nowTime()} Compile blocked: run Asset Reference analysis first.`);
+    }
+    if(refNode && refAnalysis){
       const uri = (refNode.data && refNode.data.gcs_uri) || "gs://your-bucket/character_master.jpg";
       const mode = (refNode.data && refNode.data.reference_mode) || "double_stacked";
       if(mode === "double_stacked"){
-        reference_images.push({ gcs_uri: uri, reference_type:"asset", description:"Primary Identity Anchor" });
-        reference_images.push({ gcs_uri: uri, reference_type:"style", description:"Style/Lighting Anchor" });
+        reference_images.push({ gcs_uri: uri, reference_type:"asset", description:referenceDescriptionFor(refAnalysis, "asset") });
+        reference_images.push({ gcs_uri: uri, reference_type:"style", description:referenceDescriptionFor(refAnalysis, "style") });
       } else {
-        reference_images.push({ gcs_uri: uri, reference_type:"asset", description:"Primary Identity Anchor" });
+        reference_images.push({ gcs_uri: uri, reference_type:"asset", description:referenceDescriptionFor(refAnalysis, "asset") });
       }
       identity_first_frame = uri;
-    } else {
+    } else if(!refNode) {
       if(!quiet) logLine("WARN", `${nowTime()} No Asset Reference node. Identity lock may drift.`);
     }
     if(reference_images.length > caps.max_reference_images){
@@ -1363,13 +2526,13 @@ if(type==="clip"){
     const hasClips = clips.length > 0;
     function generatorsForClip(clipId){
       const children = nodes.filter(n => n.parentNode === clipId);
-      const gens = children.filter(n => isGeneratorType(n.type));
+      const gens = gateBlocked ? [] : children.filter(n => isGeneratorType(n.type) && !(n.data && n.data.disabled));
       const order = ["face","body","clothing","pose"];
       gens.sort((a,b)=> order.indexOf(a.type) - order.indexOf(b.type));
       return gens;
     }
     function generatorsUngrouped(){
-      const gens = nodes.filter(n => isGeneratorType(n.type) && !n.parentNode);
+      const gens = gateBlocked ? [] : nodes.filter(n => isGeneratorType(n.type) && !n.parentNode && !(n.data && n.data.disabled));
       const order = ["face","body","clothing","pose"];
       gens.sort((a,b)=> order.indexOf(a.type) - order.indexOf(b.type));
       return gens;
@@ -1392,15 +2555,38 @@ if(type==="clip"){
         const aspect = String((ov.aspect !== undefined ? ov.aspect : (g.data && g.data.aspect)) || "16:9");
         const focal = String((ov.focal_length !== undefined ? ov.focal_length : "As it comes"));
         const aperture = String((ov.aperture !== undefined ? ov.aperture : "As it comes"));
-        blocks.push({ node_id: g.id, type: g.type, batch, resolution: res, aspect_ratio: aspect, focal_length: focal, aperture, prompt: (g.data && g.data.prompt) || "" });
-        promptParts.push("[" + String(g.type).toUpperCase() + " | batch=" + batch + " | " + res + " | " + aspect + " | focal=" + focal + " | aperture=" + aperture + "] " + ((g.data && g.data.prompt) || ""));
+        const cascadePrompt = (g.data && g.data.cascade_prompt) || nodeCascadePrompt(refAnalysis, g.type);
+        const userPrompt = (g.data && g.data.prompt) || "";
+        const finalPrompt = [cascadePrompt, userPrompt].filter(Boolean).join(" ");
+        const validation_warnings = validationWarningsForPrompt(refAnalysis, finalPrompt);
+        payloadWarnings.push(...validation_warnings.map(w => `${g.id}: ${w}`));
+        blocks.push({ node_id: g.id, type: g.type, batch, resolution: res, aspect_ratio: aspect, focal_length: focal, aperture, prompt: finalPrompt, user_prompt:userPrompt, cascade_prompt:cascadePrompt, analysis_ref_id: refAnalysis ? refNode.id : null, validation_warnings });
+        promptParts.push("[" + String(g.type).toUpperCase() + " | batch=" + batch + " | " + res + " | " + aspect + " | focal=" + focal + " | aperture=" + aperture + "] " + finalPrompt);
       }
       const output_last_frame_uri = (c.data && c.data.output_last_frame_uri) || ("gs://your-bucket/renders/" + clipName + "_LAST_FRAME.png");
       compiledClips.push({ clip_name: clipName, clip_index: Number((c.data && c.data.clip_index) || 0), generation_config: { method: "ingredients_to_video", seed: 3003, motion_pacing: "slow", audio_enabled: audio_enabled, seconds: clipSeconds }, ingredients: { reference_images: reference_images, first_frame: first_frame }, prompt: promptParts.join(" ").trim(), compiled_blocks: blocks, output_last_frame_uri: output_last_frame_uri, autochain_to_next_clip: autochain });
       prevClip = { clip_name: clipName, autochain_to_next_clip: autochain, output_last_frame_uri: output_last_frame_uri };
     }
-    const payload = { model_id: modelId, clips: compiledClips, credits_estimate: { total_credits: creditsAndCost.total_credits, usd_per_credit: creditsAndCost.usd_per_credit, total_usd: creditsAndCost.total_usd, currency: creditsAndCost.currency, total_local: creditsAndCost.total_local } };
-    if(!quiet) logLine("INFO", `${nowTime()} Compile OK: built ${compiledClips.length} clip(s).`);
+    const payload = {
+      model_id: modelId,
+      ready: !gateBlocked,
+      gateway: {
+        status: refNode ? (refAnalysis ? "active" : "pending_analysis") : "no_asset_reference",
+        asset_reference_node_id: refNode ? refNode.id : null,
+        activated_at: refAnalysis ? (refAnalysis.analyzed_at || (refNode.data && refNode.data.activated_at) || null) : null
+      },
+      identity_profile: refAnalysis ? (refAnalysis.identity_profile || null) : null,
+      cascade: refAnalysis ? {
+        source_ref_id: refNode.id,
+        prompt_prefix: refAnalysis.cascade && refAnalysis.cascade.prompt_prefix,
+        node_prompts: refAnalysis.cascade && refAnalysis.cascade.node_prompts,
+        validation_rules: refAnalysis.validation_rules || null
+      } : null,
+      warnings: payloadWarnings,
+      clips: compiledClips,
+      credits_estimate: creditsAndCost
+    };
+    if(!quiet && !gateBlocked) logLine("INFO", `${nowTime()} Compile OK: built ${compiledClips.length} clip(s).`);
     return payload;
   }
 
@@ -1529,6 +2715,7 @@ if(type==="clip"){
             <button className="menuItem" onClick=${()=>runMenuAction(toggleFullscreen)}><span>${isFullscreen ? "Exit Full Screen" : "Full Screen"}</span><span className="menuShortcut">F11</span></button>
             <button className="menuItem" onClick=${()=>runMenuAction(()=>rfApi.fitView({ padding: 0.2, duration: 200 }))}><span>Fit View</span><span className="menuShortcut">F</span></button>
             <button className="menuItem" onClick=${()=>runMenuAction(()=>setJsonOpen(v=>!v))}><span>${jsonOpen ? "Hide JSON Feed" : "Show JSON Feed"}</span><span className="menuShortcut"></span></button>
+            <button className="menuItem" onClick=${()=>runMenuAction(()=>setInspectorOpen(v=>!v))}><span>${inspectorOpen ? "Hide Node Context" : "Show Node Context"}</span><span className="menuShortcut"></span></button>
           </div>
         ` : null}
       </div>
@@ -1548,196 +2735,155 @@ if(type==="clip"){
   `;
 
   const paletteUI = html`
-    <div className="panel">
-      <div className="panelHeader"><h3>LIBRARY</h3><span className="pill ok">DRAG</span></div>
-      <div className="panelBody">
-        <div className="card">
-          <div className="toolSectionTitle">Image Gen</div>
-          <div className="muted">Drag into canvas</div>
-          ${byKeys(IMAGE_GEN_KEYS).map(item => html`<div key=${item.key} className="btn" draggable="true" onDragStart=${(e)=>onDragStart(e, item.key)}><div style=${{display:"flex", justifyContent:"space-between", alignItems:"center", gap:"10px"}}><div style=${{minWidth:0}}><div className="toolTitle">${item.title}</div><div className="muted">${item.subtitle}</div></div>${item.thumb ? html`<div className="thumbBox">${item.thumb}</div>` : null}</div></div>`)}
+    <div className="panel libraryPanel">
+      <div className="panelHeader"><h3>DEPARTMENT</h3><span className="pill ok">DRAG</span></div>
+      <div className="panelBody libraryBody">
+        <div className="libraryDepartments">
+          ${LIBRARY_DEPARTMENTS.map(section => html`
+            <div key=${section.title} className=${"libraryDepartment " + (section.keys.length ? "" : "empty")}>
+              <div className="libraryHeading">
+                <span className="libraryHeadingTitle">${section.title}</span>
+              </div>
+              <div className=${"libraryTray " + (section.keys.length ? "" : "empty")}>
+                ${byKeys(section.keys).map(item => html`
+                  <div
+                    key=${section.title + "-" + item.key}
+                    className="libraryTrayNode libraryNodeBtn"
+                    style=${paletteItemStyle(item.key)}
+                    draggable="true"
+                    onDragStart=${(e)=>onDragStart(e, item.key)}
+                    onDragEnd=${onDragEnd}
+                  >
+                    <div className="libraryTrayNodeText">
+                      <div className="toolTitle">${item.title}</div>
+                      <div className="muted">${item.subtitle}</div>
+                    </div>
+                    ${item.thumb ? html`<div className="thumbBox" style=${{borderColor:paletteColorForKey(item.key), color:paletteColorForKey(item.key)}}>${item.thumb}</div>` : null}
+                  </div>
+                `)}
+              </div>
+            </div>
+          `)}
         </div>
-        <div className="card">
-          <div className="toolSectionTitle">Parameter Nodes</div>
-          <div className="muted">Drag & wire into a generator node</div>
-          <div className="row2" style=${{marginTop:"10px"}}>${byKeys(PARAM_KEYS).map(item => html`<div key=${item.key} className="btnSmall" draggable="true" onDragStart=${(e)=>onDragStart(e, item.key)}><div className="toolTitle">${item.title}</div><div className="muted">${item.subtitle}</div></div>`)}</div>
-        </div>
-        <div className="card">
-          <div className="toolSectionTitle">Misc</div>
-          <div className="muted">Background / scene nodes</div>
-          ${byKeys(MISC_KEYS).map(item => html`<div key=${item.key} className="btn" draggable="true" onDragStart=${(e)=>onDragStart(e, item.key)}><div style=${{display:"flex", justifyContent:"space-between", alignItems:"center", gap:"10px"}}><div style=${{minWidth:0}}><div className="toolTitle">${item.title}</div><div className="muted">${item.subtitle}</div></div></div></div>`)}
+        <div className="libraryUtilityBlock">
+          <div className="libraryUtilityTitle">Utils / Background</div>
+          <div className="libraryUtilityColumn">
+            ${byKeys(LIBRARY_UTILS).map(item => html`
+              <div
+                key=${"utils-" + item.key}
+                className="libraryTrayNode libraryUtilityNode libraryNodeBtn"
+                style=${paletteItemStyle(item.key)}
+                draggable="true"
+                onDragStart=${(e)=>onDragStart(e, item.key)}
+                onDragEnd=${onDragEnd}
+              >
+                <div className="libraryTrayNodeText">
+                  <div className="toolTitle">${item.title}</div>
+                  <div className="muted">${item.subtitle}</div>
+                </div>
+                ${item.thumb ? html`<div className="thumbBox" style=${{borderColor:paletteColorForKey(item.key), color:paletteColorForKey(item.key)}}>${item.thumb}</div>` : null}
+              </div>
+            `)}
+          </div>
         </div>
       </div>
     </div>
   `;
 
   const totalClips = nodes.filter(n => n.type === "clip").length || 1;
+  const creditSections = creditsAndCost.sections || {};
+  const imageCredits = (creditSections.image_prep || 0) + (creditSections.nano_banana || 0);
+  const creditBadgeTitle = (creditsAndCost.breakdown || []).map(item => `${item.category}: ${item.name} = ${formatCredits(item.credits)} credits`).join("\n");
   const canvasUI = html`
     <div className="rfWrap panel canvasPanel">
       <button className="jsonToggle" title="Toggle JSON Feed" onClick=${()=>setJsonOpen(v=>!v)}>${jsonOpen ? ">" : "<"}</button>
       <div className="topBar">
-        <div className="badge">Model: <span style=${{color:"var(--ok)"}}>${creditsAndCost.model}</span> - Clips: <span style=${{color:"var(--ok)"}}>${totalClips}</span> - Credits: <span style=${{color:"var(--ok)"}}>${creditsAndCost.total_credits.toFixed(0)}</span></div>
-        <div className="badge">Shift+click / box select</div>
+        <div className="badge" title=${creditBadgeTitle}>Model: <span style=${{color:"var(--ok)"}}>${creditsAndCost.model}</span> - Clips: <span style=${{color:"var(--ok)"}}>${totalClips}</span> - Credits: <span style=${{color:"var(--ok)"}}>${formatCredits(creditsAndCost.total_credits)}</span> <span style=${{color:"var(--muted)"}}>(V ${formatCredits(creditSections.video || 0)} / Img ${formatCredits(imageCredits)} / A ${formatCredits(creditSections.analysis || 0)})</span></div>
+        <div className="badge">Snap: <span style=${{color: snapEnabled ? "var(--ok)" : "var(--muted)"}}>${snapEnabled ? "On" : "Off"}</span> - S</div>
       </div>
       <div style=${{height:"100%", width:"100%"}} onDrop=${onDrop} onDragOver=${onDragOver}>
-        <${ReactFlow} nodes=${nodes} edges=${edges} onNodesChange=${onNodesChange} onEdgesChange=${onEdgesChange} onConnect=${onConnect} onConnectStart=${onConnectStart} onConnectEnd=${onConnectEnd} onNodeDrag=${onNodeDrag} onEdgeClick=${(e, edge)=>{ setSelectedEdgeIds([edge.id]); setSelectedIds([]); }} nodeTypes=${nodeTypes} edgeTypes=${edgeTypes} fitView=${true} onSelectionChange=${onSelectionChange} selectionOnDrag=${true} selectNodesOnDrag=${true} panOnDrag=${panOnDrag} panActivationKeyCode="Alt" defaultEdgeOptions=${defaultEdgeOptions} proOptions=${proOptions}>
-          <${Background} key="background" gap=${18} />
-          <${MiniMap} key="minimap" pannable zoomable />
-          <${Controls} key="controls" />
+        <${ReactFlow} nodes=${nodes} edges=${renderedEdges} onNodesChange=${onNodesChange} onEdgesChange=${onEdgesChange} onConnect=${onConnect} onConnectStart=${onConnectStart} onConnectEnd=${onConnectEnd} onNodeDrag=${onNodeDrag} onNodeDragStop=${onNodeDragStop} onEdgeClick=${(e, edge)=>{ setSelectedEdgeIds([edge.id]); setSelectedIds([]); setEdgeMenu(null); }} onEdgeContextMenu=${onEdgeContextMenu} nodeTypes=${nodeTypes} edgeTypes=${edgeTypes} fitView=${true} minZoom=${FLOW_MIN_ZOOM} onSelectionChange=${onSelectionChange} selectionOnDrag=${true} selectNodesOnDrag=${true} panOnDrag=${panOnDrag} panActivationKeyCode="Alt" defaultEdgeOptions=${defaultEdgeOptions} proOptions=${proOptions}>
+          <${Background} key="background" gap=${GRID_DOT_GAP} />
+          <${MiniMap}
+            key="minimap"
+            className="stageMiniMap"
+            position="bottom-left"
+            pannable
+            zoomable
+            nodeColor=${miniMapNodeColor}
+            nodeStrokeColor=${miniMapNodeStrokeColor}
+            nodeStrokeWidth=${2}
+            nodeBorderRadius=${3}
+            maskColor="rgba(18,18,18,.42)"
+            style=${MINIMAP_STYLE}
+          />
         </${ReactFlow}>
       </div>
     </div>
   `;
 
-  // RESTORED: Detailed inspector UI with all inputs for different node types
+  // Lightweight context drawer. Primary node controls live inside the nodes.
   const inspectorUI = html`
-    <div className="panel">
-      <div className="panelHeader"><h3>INSPECTOR</h3></div>
+    <div className="panel inspectorPanel">
+      <div className="panelHeader">
+        <h3>NODE CONTEXT</h3>
+        <button className="panelMiniBtn" onClick=${()=>setInspectorOpen(false)}>Hide</button>
+      </div>
       <div className="panelBody">
         ${selectedPrimary ? html`
-          <div className="card">
-            <div style=${{fontWeight:900, color:"#fff"}}>${(selectedPrimary.data && selectedPrimary.data.title) || selectedPrimary.type}</div>
-          <div className="muted">ID: ${selectedPrimary.id} - type: ${selectedPrimary.type}</div>
-          </div>
-          
-          <div className="card">
-            <div style=${{fontWeight:900, color:"#fff"}}>Properties</div>
-            <label>Title</label>
-            <input value=${(selectedPrimary.data && selectedPrimary.data.title) || ""} onInput=${(e)=>updateNode(selectedPrimary.id, { title: e.target.value })} />
-
-            <label>Type</label>
-            ${(() => {
-              const t = selectedPrimary.type;
-              if(t === "ref"){
-                const v = (selectedPrimary.data && selectedPrimary.data.ref_role) || "Primary";
-                return html`
-                  <select value=${v} onChange=${(e)=>updateNode(selectedPrimary.id, { ref_role: e.target.value })}>
-                    <option value="Primary">Primary (Main Character)</option>
-                    <option value="Secondary">Secondary</option>
-                  </select>
-                `;
-              }
-              const OPTS = {
-                face:["Face Variations"],
-                body:["Body Variations"],
-                clothing:["Clothing Variations"],
-                pose:["Pose Variations"],
-                param:["Param"],
-                clip:["Clip Group"],
-                model:["Model (Veo)"]
-              };
-              const opts = OPTS[t] || [t];
-              const v = (selectedPrimary.data && selectedPrimary.data.node_type) || (opts[0] || t);
-              return html`
-                <select value=${v} onChange=${(e)=>updateNode(selectedPrimary.id, { node_type: e.target.value })}>
-                  ${opts.map(o => html`<option key=${o} value=${o}>${o}</option>`)}
-                </select>
-              `;
-            })()}
-
-            <label>Subtitle</label>
-            <input value=${(selectedPrimary.data && selectedPrimary.data.subtitle) || ""} onInput=${(e)=>updateNode(selectedPrimary.id, { subtitle: e.target.value })} />
-
-            <label>Tags (comma-separated)</label>
-            <input value=${((selectedPrimary.data && selectedPrimary.data.tags) || []).join(", ")} onInput=${(e)=>updateNode(selectedPrimary.id, { tags: String(e.target.value||"").split(",").map(s=>s.trim()).filter(Boolean) })} />
-
-            ${selectedPrimary.type === "model" ? html`
-              <label>Model</label>
-              <select value=${(selectedPrimary.data && selectedPrimary.data.model_ver) || "Veo 3.1 Quality"} onChange=${(e)=>updateNode(selectedPrimary.id, { model_ver: e.target.value })}>
-                ${Object.keys(MODEL_CATALOG).map(k => html`<option key=${k} value=${k}>${k}</option>`)}
-              </select>
-
-              <div className="row2" style=${{marginTop:"10px"}}>
-                <div>
-                  <label>Seconds per clip</label>
-                  <input type="number" min="4" max="30" value=${Number((selectedPrimary.data && selectedPrimary.data.seconds_per_clip) || 8)} onInput=${(e)=>updateNode(selectedPrimary.id, { seconds_per_clip: Number(e.target.value||8) })} />
-                </div>
-                <div>
-                  <label>Audio enabled</label>
-                  <select value=${(selectedPrimary.data && selectedPrimary.data.audio_enabled) ? "yes" : "no"} onChange=${(e)=>updateNode(selectedPrimary.id, { audio_enabled: e.target.value === "yes" })}>
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                  </select>
+          ${(() => {
+            const data = selectedPrimary.data || {};
+            const inputCount = edges.filter(e => e.target === selectedPrimary.id).length;
+            const outputCount = edges.filter(e => e.source === selectedPrimary.id).length;
+            const activeRef = selectedPrimary.type === "ref" && isAnalysisActivated(data.analysis);
+            const statusClass = selectedPrimary.type === "ref" ? (activeRef ? "ok" : "err") : (data.disabled ? "err" : "ok");
+            const statusText = selectedPrimary.type === "ref" ? (activeRef ? "Gateway Active" : "Gateway Locked") : (data.disabled ? "Locked" : "Ready");
+            const detailRows = [
+              ["Type", selectedPrimary.type],
+              ["Inputs", inputCount],
+              ["Outputs", outputCount],
+              selectedPrimary.type === "nano_banana" ? ["Generation", data.generation_status || "idle"] : null,
+              selectedPrimary.type === "nano_banana" && data.result_model ? ["Model", data.result_model] : null,
+              selectedPrimary.type === "ref" ? ["Analysis", data.analysis_status || (activeRef ? "analyzed" : "pending")] : null,
+              data.image_name ? ["Image", data.image_name] : null,
+              data.cascade_source_ref_id ? ["Cascade", data.cascade_source_ref_id] : null,
+            ].filter(Boolean);
+            return html`
+              <div className="contextSummary">
+                <div className="contextTitle">${data.title || selectedPrimary.type}</div>
+                <div className="muted">${selectedPrimary.id}</div>
+                <div className="contextPills">
+                  <span className=${"pill " + statusClass}>${statusText}</span>
+                  ${data.tags && data.tags.length ? data.tags.slice(0, 3).map((tag, i) => html`<span key=${tag + i} className="pill">${tag}</span>`) : null}
                 </div>
               </div>
-            ` : null}
-
-            ${["face","body","clothing","pose"].includes(selectedPrimary.type) ? html`
-              <div className="row3" style=${{marginTop:"10px"}}>
-                <div>
-                  <label>Batch</label>
-                  <input type="number" min="1" max="8" value=${Number((selectedPrimary.data && selectedPrimary.data.batch) || 1)} onInput=${(e)=>updateNode(selectedPrimary.id, { batch: Number(e.target.value||1) })} />
-                </div>
-                <div>
-                  <label>Resolution</label>
-                  <select value=${String((selectedPrimary.data && selectedPrimary.data.res) || "HD")} onChange=${(e)=>updateNode(selectedPrimary.id, { res: e.target.value })}>
-                    ${RES_PRESETS.map(r => html`<option key=${r} value=${r}>${r}</option>`)}
-                  </select>
-                </div>
-                <div>
-                  <label>Aspect</label>
-                  <select value=${String((selectedPrimary.data && selectedPrimary.data.aspect) || "16:9")} onChange=${(e)=>updateNode(selectedPrimary.id, { aspect: e.target.value })}>
-                    ${ASPECT_PRESETS.map(a => html`<option key=${a} value=${a}>${a}</option>`)}
-                  </select>
-                </div>
+              <div className="contextGrid">
+                ${detailRows.map(row => html`
+                  <div key=${row[0]} className="contextMetric">
+                    <span>${row[0]}</span>
+                    <strong>${row[1]}</strong>
+                  </div>
+                `)}
               </div>
-
-              <label>Ref slots (asset/style inputs)</label>
-              <input type="number" min="0" max="3" value=${Number((selectedPrimary.data && selectedPrimary.data.ref_slots) || 1)} onInput=${(e)=>updateNode(selectedPrimary.id, { ref_slots: Number(e.target.value||1) })} />
-
-              <label>Prompt</label>
-              <textarea value=${(selectedPrimary.data && selectedPrimary.data.prompt) || ""} onInput=${(e)=>updateNode(selectedPrimary.id, { prompt: e.target.value })}></textarea>
-            ` : null}
-
-            ${selectedPrimary.type === "param" ? html`
-              <label>Param key</label>
-              <input value=${String((selectedPrimary.data && selectedPrimary.data.param_key) || "")} onInput=${(e)=>updateNode(selectedPrimary.id, { param_key: e.target.value })} />
-              <label>Param value</label>
-              <input value=${String((selectedPrimary.data && selectedPrimary.data.param_val) || "")} onInput=${(e)=>updateNode(selectedPrimary.id, { param_val: e.target.value })} />
-            ` : null}
-          </div>
-
-          ${selectedPrimary.type === "ref" ? html`
-            <div className="card">
-              <div style=${{fontWeight:900, color:"#fff"}}>Asset Reference</div>
-              <label>Upload image</label>
-              <input type="file" accept="image/*" onChange=${(e)=>onRefImageChange(e.target.files && e.target.files[0])} />
-              <div className="row2" style=${{marginTop:"10px"}}>
-                <button className="btnSmall" onClick=${runRefAnalysis}>Run Analysis</button>
-                <button className="btnSmall" onClick=${()=>updateNode(selectedPrimary.id, {analysis:null})}>Clear</button>
-              </div>
-              ${selectedPrimary.data && selectedPrimary.data.analysis ? html`
-                <label>Analysis JSON</label>
-                <textarea readOnly style=${{minHeight:"200px"}}>${JSON.stringify(selectedPrimary.data.analysis, null, 2)}</textarea>
+              ${data.cascade_prompt ? html`
+                <div className="contextBlock">
+                  <div className="contextLabel">Cascade Prompt</div>
+                  <div className="contextText">${data.cascade_prompt}</div>
+                </div>
               ` : null}
-            </div>
-          ` : null}
-        ` : html`<div className="muted">Select a node to edit properties.</div>`}
-
-        <div className="card">
-          <div style=${{fontWeight:900, color:"#fff"}}>Compile</div>
-          <button className="btnSmall" onClick=${()=>{
-            const payload = compilePayloadMultiClip();
-            setCompiledJson(payload);
-          }}>COMPILE</button>
-
-          <div className="row2" style=${{marginTop:"10px"}}>
-            <button className="btnSmall" onClick=${async ()=>{
-              try{
-                const payload = compilePayloadMultiClip();
-                setCompiledJson(payload);
-                if(!payload){ return; }
-                await runVeoGeneration(payload);
-              }catch(err){
-                logLine("ERROR", `${nowTime()} RUN failed: ${String(err && (err.message||err))}`);
-              }
-            }}>RUN (Generate)</button>
-            <button className="btnSmall" onClick=${()=>{ setCompiledJson(null); logLine("INFO", `${nowTime()} Cleared compiled payload.`); }}>Clear</button>
-          </div>
-          ${compiledJson ? html`
-            <label>Compiled payload</label>
-            <textarea readOnly style=${{minHeight:"260px"}}>${JSON.stringify(compiledJson, null, 2)}</textarea>
-          ` : null}
-        </div>
+              ${data.generation_error ? html`
+                <div className="contextBlock contextError">
+                  <div className="contextLabel">Generation Error</div>
+                  <div className="contextText">${data.generation_error}</div>
+                </div>
+              ` : null}
+              <div className="contextBlock">
+                <div className="contextLabel">Selected Node Data</div>
+                <textarea className="jsonEditor contextJson" readOnly>${JSON.stringify(data, null, 2)}</textarea>
+              </div>
+            `;
+          })()}
+        ` : html`<div className="muted">Select a node for context.</div>`}
 
       </div>
     </div>
@@ -1746,12 +2892,36 @@ if(type==="clip"){
   const jsonUI = html`
     <div className="panel">
       <div className="panelHeader">
-        <h3>JSON Feed</h3>
-        <span className="pill">${liveFeed ? liveFeed.subtitle : 'No model selected'}</span>
+        <h3>${showingAnalysisJson ? "Analysis JSON" : "JSON Feed"}</h3>
+        <div className="panelHeaderActions">
+          <button className=${"panelMiniBtn " + (inspectorOpen ? "active" : "")} onClick=${()=>setInspectorOpen(v=>!v)}>Context</button>
+          ${!showingAnalysisJson ? html`
+            <button className="panelMiniBtn" onClick=${()=>{
+              const payload = compilePayloadMultiClip();
+              setCompiledJson(payload);
+            }}>Compile</button>
+            <button className="panelMiniBtn primary" onClick=${async ()=>{
+              try{
+                const payload = compilePayloadMultiClip();
+                setCompiledJson(payload);
+                if(!payload || payload.ready === false){ return; }
+                await runVeoGeneration(payload);
+              }catch(err){
+                logLine("ERROR", `${nowTime()} RUN failed: ${String(err && (err.message||err))}`);
+              }
+            }}>Run</button>
+            ${compiledJson ? html`<button className="panelMiniBtn" onClick=${()=>{ setCompiledJson(null); logLine("INFO", `${nowTime()} Cleared compiled payload.`); }}>Live</button>` : null}
+          ` : null}
+          <span className=${"pill " + (showingAnalysisJson ? (analysisJsonError ? "err" : "ok") : "")}>${showingAnalysisJson ? (analysisJsonError ? "Invalid JSON" : "Editable") : (compiledJson ? "Compiled snapshot" : (liveFeed ? liveFeed.subtitle : 'No model selected'))}</span>
+        </div>
       </div>
       <div className="panelBody">
-        <div className="muted" style=${{marginBottom:'8px'}}>Realtime compiled multi-clip payload.</div>
-        <textarea readOnly style=${{width:'100%', minHeight:'70vh'}}>${liveFeed ? JSON.stringify(liveFeed.payload, null, 2) : ''}</textarea>
+        ${showingAnalysisJson ? html`
+          <textarea className=${"jsonEditor " + (analysisJsonError ? "jsonError" : "")} value=${analysisJsonDraft} onInput=${(e)=>onAnalysisJsonEdit(e.target.value)} style=${{width:'100%', minHeight:'70vh'}}></textarea>
+          ${analysisJsonError ? html`<div className="jsonErrorText">${analysisJsonError}</div>` : null}
+        ` : html`
+          <textarea className="jsonEditor" readOnly style=${{width:'100%', minHeight:'70vh'}}>${compiledJson ? JSON.stringify(compiledJson, null, 2) : (liveFeed ? JSON.stringify(liveFeed.payload, null, 2) : '')}</textarea>
+        `}
       </div>
     </div>
   `;
@@ -1777,6 +2947,35 @@ if(type==="clip"){
       </div>
     </div>
   ` : null;
+
+  const edgeMenuUI = edgeMenu ? (() => {
+    const edge = edges.find(e => e.id === edgeMenu.edgeId);
+    if(!edge) return null;
+    const selectedMode = edgeModeForType(edge.type);
+    const menuX = Math.min(edgeMenu.x, window.innerWidth - 150);
+    const menuY = Math.min(edgeMenu.y, window.innerHeight - 94);
+    const item = (mode, label) => html`
+      <button
+        key=${mode}
+        className="edgeContextItem"
+        onClick=${()=>setEdgeMode(edge.id, mode)}
+      >
+        <span className="edgeContextTick">${selectedMode === mode ? "✓" : ""}</span>
+        <span>${label}</span>
+      </button>
+    `;
+    return html`
+      <div
+        className="edgeContextMenu"
+        style=${{left: menuX + "px", top: menuY + "px"}}
+        onPointerDown=${(e)=>e.stopPropagation()}
+        onContextMenu=${(e)=>e.preventDefault()}
+      >
+        ${item("linear", "Linear")}
+        ${item("bezier", "Bezier")}
+      </div>
+    `;
+  })() : null;
 
   const smartConnectUI = smartConnect ? (() => {
     const selected = smartConnect.options[smartConnect.selectedIndex] || smartConnect.options[0];
@@ -1828,8 +3027,9 @@ if(type==="clip"){
     <div className="shell">
       ${menuBarUI}
       ${debugConsoleUI}
+      ${edgeMenuUI}
       ${smartConnectUI}
-      <div className="app ${jsonOpen ? 'jsonOpen' : ''}">${paletteUI}${canvasUI}${inspectorUI}${jsonOpen ? jsonUI : null}</div>
+      <div className=${"app " + (jsonOpen ? "jsonOpen " : "") + (inspectorOpen ? "inspectorOpen" : "")}>${paletteUI}${canvasUI}${jsonOpen ? jsonUI : null}${inspectorOpen ? inspectorUI : null}</div>
       ${toast ? html`<div className="toastHost"><div key=${toast.id} className="stageToast">${toast.message}</div></div>` : null}
     </div>
   `;

@@ -15,6 +15,7 @@ dist/
 
 # Local secrets
 .env
+access.env
 .streamlit/secrets.toml
 
 # Runtime/debug output

@@ -10,7 +10,8 @@ Install dependencies:
 npm.cmd install
 ```
 
-Copy `.env.example` to `.env` and set `GOOGLE_API_KEY`.
+Copy `access.env.example` to `access.env` and set `GEMINI_API_KEY`.
+`access.env` is ignored by git and is loaded before `.env`.
 
 Start the dev server:
 
@@ -38,30 +39,40 @@ npm.cmd run start
 
 ## Configuration
 
-Preferred configuration is `.env`:
+Preferred credentials are stored in `access.env`:
 
 ```text
-GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+# Optional overrides:
+# GEMINI_ANALYSIS_MODEL=gemini-2.5-flash
+# GEMINI_IMAGE_MODEL=gemini-3-pro-image
+```
+
+General runtime configuration can stay in `.env`:
+
+```text
 VEO_DEFAULT_FPS=24
 VEO_DEFAULT_RESOLUTION=1080p
 HOST=127.0.0.1
 PORT=5173
 ```
 
-For compatibility, the server also reads `.streamlit/secrets.toml` if it already exists, but Streamlit is no longer required.
+For compatibility, `GOOGLE_API_KEY` in `.env` and `.streamlit/secrets.toml` are still supported, but `GEMINI_API_KEY` in `access.env` is preferred.
 
 ## Architecture
 
 - `src/App.jsx` contains the ReactFlow workspace UI.
 - `src/App.css` contains the app styling migrated from the previous Streamlit-hosted HTML shell.
 - `src/main.jsx` loads browser-safe runtime config from the Express server before rendering React.
-- `server/index.js` serves the React app and owns the Veo API proxy routes.
+- `server/index.js` serves the React app and owns the Gemini/Veo API proxy routes.
 - The browser receives only proxy metadata and a temporary token. Google API calls and video downloads happen server-side so the API key is not exposed.
 
 API routes:
 
 ```text
 GET  /api/config
+POST /api/gemini/analyze
+POST /api/gemini/image
 POST /api/veo/submit
 POST /api/veo/status
 GET  /api/veo/download
