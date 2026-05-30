@@ -200,9 +200,13 @@ app.post("/api/veo/status", requireProxyToken, async (req, res) => {
     }
 
     const operation = await googleJsonRequest("GET", `${VEO_BASE_URL}/${operationName}`, null, 45_000);
+    const usageMetadata = operation?.response?.usageMetadata || operation?.metadata?.usageMetadata || null;
     res.json({
       done: Boolean(operation.done),
       video_uri: extractVideoUri(operation),
+      video_uris: extractVideoUris(operation),
+      usage_metadata: usageMetadata,
+      operation_metadata: operation.metadata || null,
       error: operation.error,
     });
   } catch (error) {
@@ -704,7 +708,12 @@ function buildVeoRequest(payload) {
 }
 
 function extractVideoUri(operationResponse) {
-  return operationResponse?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri || null;
+  return extractVideoUris(operationResponse)[0] || null;
+}
+
+function extractVideoUris(operationResponse) {
+  const samples = operationResponse?.response?.generateVideoResponse?.generatedSamples || [];
+  return samples.map((sample) => sample?.video?.uri).filter(Boolean);
 }
 
 function sendError(res, error) {

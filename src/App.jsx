@@ -40,10 +40,12 @@ const ESTIMATE_RATES = {
 };
 const ASPECT_PRESETS = ["1:1","9:16","16:9","21:9"];
 
-const NODE_COLORS = { model:"#E63946", omni_model:"#7DD3FC", ref:"#F4A261", face:"#E9C46A", body:"#2A9D8F", clothing:"#3A86FF", pose:"#8E44AD", lens:"#C4B5FD", param:"#6C757D", clip:"#6C757D", nano_banana:"#FFD700" };
+const NODE_COLORS = { model:"#E63946", omni_model:"#7DD3FC", ref:"#F4A261", face:"#E9C46A", body:"#2A9D8F", clothing:"#3A86FF", pose:"#8E44AD", lens:"#C4B5FD", param:"#6C757D", text_util:"#A7F3D0", clip:"#6C757D", nano_banana:"#FFD700" };
 const REF_GATE_COLORS = { pending:"#E63946", active:"#4ec9b0" };
 const ANALYSIS_SCHEMA_VERSION = "stage.asset_reference.analysis.v1";
 const GRID_DOT_GAP = 18;
+const SIMPLE_PARAM_NODE_WIDTH = GRID_DOT_GAP * 9;
+const SIMPLE_PARAM_NODE_HEIGHT = GRID_DOT_GAP * 7;
 const FLOW_MIN_ZOOM = 0.08;
 const WIRE_PATCH_COLOR = REF_GATE_COLORS.active;
 const MINIMAP_STYLE = {
@@ -71,10 +73,11 @@ const PALETTE = [
   { key:"pose", title:"Pose action", subtitle:"Readable silhouette", tags:["action"] },
   { key:"param_batch_4", title:"Batch", subtitle:"Output samples", tags:["parameter"] },
   { key:"param_length_8", title:"Length", subtitle:"Clip duration", tags:["parameter"] },
-  { key:"param_fps_24", title:"FPS", subtitle:"Frame rate", tags:["parameter"] },
+  { key:"param_fps_24", title:"Framerate", subtitle:"Frame rate", tags:["parameter"] },
   { key:"param_aspect_16_9", title:"Aspect", subtitle:"Frame shape", tags:["parameter"] },
   { key:"param_res_hd", title:"Resolution", subtitle:"Output size", tags:["parameter"] },
   { key:"param_lens", title:"Lens", subtitle:"Optics + shutter", tags:["parameter"] },
+  { key:"text_util", title:"Text Util", subtitle:"Prompt writing", tags:["prompt"] },
   { key:"clip", title:"Background", subtitle:"Scene / environment", tags:["backdrop"] }
 ];
 
@@ -86,7 +89,7 @@ const SHUTTER_EFFECT_OPTIONS = ["Natural Motion Blur","Long Exposure / Slow Shut
 const PARAMETER_DEFS = [
   { key:"batch", title:"Batch", param_key:"batch", default_val:1, options:[1,2,3,4], note:"Veo max output videos per prompt is 4." },
   { key:"length", title:"Length", param_key:"length_seconds", default_val:8, options:[4,6,8,10], suffix:"s", note:"Veo accepts 4, 6, or 8 seconds; 10s is kept for Omni intent." },
-  { key:"fps", title:"FPS", param_key:"fps", default_val:24, options:[24,30,60], note:"Veo 3.1 submits at 24 FPS; higher values are Omni/style intent." },
+  { key:"fps", title:"Framerate", param_key:"fps", default_val:24, options:[24,30,60], note:"Veo 3.1 submits at 24 FPS; higher values are Omni/style intent." },
   { key:"aspect", title:"Aspect", param_key:"aspect", default_val:"16:9", options:["16:9","9:16"], note:"Veo 3.1 accepts landscape or portrait." },
   { key:"resolution", title:"Resolution", param_key:"res", default_val:"1080p", options:["720p","1080p","4K"], note:"Veo 3.1 supports 720p, 1080p, and 4K preview output." },
   { key:"lens", title:"Lens", param_key:"lens", default_val:"lens", options:[], note:"Prompt-level optical guidance: focal length, aperture, lens effects, and shutter effects." }
@@ -101,7 +104,7 @@ const LIBRARY_DEPARTMENTS = [
   { title:"Directing", keys:[] },
   { title:"Print", keys:["model","omni_model"] }
 ];
-const LIBRARY_UTILS = ["clip"];
+const LIBRARY_UTILS = ["text_util","clip"];
 const byKeys = (keys) => keys.map(k => PALETTE.find(p=>p.key===k)).filter(Boolean);
 function paletteTypeForKey(key){
   return String(key || "").startsWith("param_") ? "param" : key;
@@ -160,15 +163,27 @@ function parameterValueLabel(def, value){
   return `${value}${def && def.suffix && !String(value).endsWith(def.suffix) ? def.suffix : ""}`;
 }
 
+function selectWidthForLabels(labels, minCh = 7, extraCh = 4){
+  const longest = (labels || []).reduce((max, label) => Math.max(max, String(label || "").length), 0);
+  return `${Math.max(minCh, longest + extraCh)}ch`;
+}
+
+function parameterSelectWidth(def){
+  return selectWidthForLabels((def && def.options || []).map(option => parameterValueLabel(def, option)));
+}
+
 function defaultPropsFor(type){
   if(type==="model"){
-    return { title:"VEO", subtitle:"Vertex video model", tags:["gates features","credits + price"], model_ver:"Veo 3.1 Quality", seconds_per_clip:8, resolution:"1080p", fps:24, batch:1, aspect:"16:9", focal_length:"As it comes", aperture:"As it comes", lens_effect:"None", shutter_effect:"Natural Motion Blur", audio_enabled:true, usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
+    return { title:"VEO", subtitle:"Vertex video model", tags:["gates features","credits + price"], model_ver:"Veo 3.1 Quality", seconds_per_clip:8, resolution:"1080p", fps:24, batch:1, aspect:"16:9", focal_length:"As it comes", aperture:"As it comes", lens_effect:"None", shutter_effect:"Natural Motion Blur", audio_enabled:true, prompt:"", prompt_open:false, usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
   }
   if(type==="omni_model"){
-    return { title:"GOOGLE OMNI", subtitle:"Any-input video + edit model", tags:["gemini omni flash","up to 5 photos","video/audio"], model_ver:"Gemini Omni Flash", length_seconds:10, resolution:"4K", fps:24, batch:1, aspect:"16:9", focal_length:"As it comes", aperture:"As it comes", lens_effect:"None", shutter_effect:"Natural Motion Blur", audio_enabled:true, editing_layer:"nano-banana-pro", usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
+    return { title:"GOOGLE OMNI", subtitle:"Any-input video + edit model", tags:["gemini omni flash","up to 5 photos","video/audio"], model_ver:"Gemini Omni Flash", length_seconds:10, resolution:"4K", fps:24, batch:1, aspect:"16:9", focal_length:"As it comes", aperture:"As it comes", lens_effect:"None", shutter_effect:"Natural Motion Blur", audio_enabled:true, editing_layer:"nano-banana-pro", prompt:"", prompt_open:false, usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
   }
   if(type==="nano_banana"){ 
     return { title:"Nano Banana Pro", subtitle:"14-Input Blender", tags:["gemini 3 pro"], res:"HD", aspect:"16:9", slots: Array(14).fill(null), prompt: "", result_uri: null, result_data_url: null, result_text: "", result_model: "", generation_status:"idle" }; 
+  }
+  if(type==="text_util"){
+    return { title:"TEXT", subtitle:"Prompt note", tags:["prompt"], prompt:"" };
   }
   if(type==="ref"){
     return { title:"Asset Reference", subtitle:"", tags:["nano banana pro","identity lock"], gcs_uri:"gs://your-bucket/character_master.jpg", reference_mode:"double_stacked", ref_slots:2, image_store_key:null, image_preview_url:null, image_data_url:null, image_name:null, analysis:null, analysis_status:"pending" };
@@ -194,25 +209,94 @@ function defaultPropsFor(type){
   return { title:type.toUpperCase(), subtitle:"", tags:[] };
 }
 
+function edgeSourceSortValue(edge, nodes){
+  const source = nodes.find(n => n.id === edge.source);
+  const pos = (source && source.position) || {};
+  return `${String(pos.y || 0).padStart(8, "0")}:${String(pos.x || 0).padStart(8, "0")}:${edge.id || ""}`;
+}
+
+function isPipeUtilityType(type){
+  return type === "param" || type === "text_util";
+}
+
+function applyParameterNode(params, src){
+  if(!src || src.type !== "param") return;
+  const data = src.data || {};
+  if(data.param_key === "lens"){
+    Object.assign(params, lensParamValues(data));
+    return;
+  }
+  if(data.param_values && typeof data.param_values === "object"){
+    Object.assign(params, data.param_values);
+  }
+  const k = data.param_key;
+  const v = data.param_val;
+  if(k) params[k] = v;
+}
+
 function incomingParams(nodeId, nodes, edges){
-  const incoming = edges.filter(e => e.target === nodeId).map(e => e.source);
   const params = {};
-  for(const sid of incoming){
-    const src = nodes.find(n => n.id === sid);
-    if(src && src.type === "param"){
-      if(src.data && src.data.param_key === "lens"){
-        Object.assign(params, lensParamValues(src.data));
-        continue;
-      }
-      if(src.data && src.data.param_values && typeof src.data.param_values === "object"){
-        Object.assign(params, src.data.param_values);
-      }
-      const k = src.data && src.data.param_key;
-      const v = src.data && src.data.param_val;
-      if(k) params[k] = v;
+  const visited = new Set();
+  function walk(id){
+    if(!id || visited.has(id)) return;
+    visited.add(id);
+    const incoming = edges
+      .filter(e => e.target === id)
+      .slice()
+      .sort((a, b) => edgeSourceSortValue(a, nodes).localeCompare(edgeSourceSortValue(b, nodes)));
+    for(const edge of incoming){
+      const src = nodes.find(n => n.id === edge.source);
+      if(!src) continue;
+      walk(src.id);
+      applyParameterNode(params, src);
     }
   }
+  walk(nodeId);
   return params;
+}
+
+function upstreamTextPrompts(nodeId, nodes, edges){
+  const prompts = [];
+  const visited = new Set();
+  function walk(id){
+    if(!id || visited.has(id)) return;
+    visited.add(id);
+    const incoming = edges
+      .filter(e => e.target === id)
+      .slice()
+      .sort((a, b) => edgeSourceSortValue(a, nodes).localeCompare(edgeSourceSortValue(b, nodes)));
+    for(const edge of incoming){
+      const src = nodes.find(n => n.id === edge.source);
+      if(!src) continue;
+      walk(src.id);
+      if(src.type === "text_util" && src.data && String(src.data.prompt || "").trim()){
+        prompts.push(String(src.data.prompt).trim());
+      }
+    }
+  }
+  walk(nodeId);
+  return prompts;
+}
+
+function firstNonUtilitySourceNode(sourceId, nodes, edges){
+  const visited = new Set();
+  function walk(id){
+    if(!id || visited.has(id)) return null;
+    visited.add(id);
+    const node = nodes.find(n => n.id === id);
+    if(!node) return null;
+    if(!isPipeUtilityType(node.type)) return node;
+    const incoming = edges
+      .filter(edge => edge.target === id)
+      .slice()
+      .sort((a, b) => edgeSourceSortValue(a, nodes).localeCompare(edgeSourceSortValue(b, nodes)));
+    for(let i = incoming.length - 1; i >= 0; i -= 1){
+      const upstream = walk(incoming[i].source);
+      if(upstream) return upstream;
+    }
+    return node;
+  }
+  return walk(sourceId);
 }
 
 function estimateNumber(value, fallback){
@@ -229,6 +313,18 @@ function formatCredits(value){
   const num = roundCredits(value);
   if(Math.abs(num) >= 100) return num.toFixed(0);
   return Number.isInteger(num) ? String(num) : num.toFixed(1);
+}
+
+function formatMoney(value, currency){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return "--";
+  const code = currency || "USD";
+  try{
+    return new Intl.NumberFormat(undefined, { style:"currency", currency:code, maximumFractionDigits:4 }).format(num);
+  }catch(err){
+    const symbol = code === "GBP" ? "£" : (code === "EUR" ? "€" : "$");
+    return `${symbol}${num.toFixed(num < 1 ? 4 : 2)}`;
+  }
 }
 
 function resMultiplier(res){
@@ -626,6 +722,43 @@ function requestNanoBananaGeneration(nodeId){
   window.dispatchEvent(new CustomEvent("stage:nano-generate", { detail: { nodeId } }));
 }
 
+function requestModelGeneration(nodeId){
+  window.dispatchEvent(new CustomEvent("stage:model-generate", { detail: { nodeId } }));
+}
+
+function modelOutputPreviewSrc(output){
+  if(!output) return "";
+  const uri = output.preview_url || output.uri || output.video_uri || output.image_uri || "";
+  if(!uri) return "";
+  if(String(uri).startsWith("data:")) return uri;
+  if(output.kind === "video" || output.mime_type === "video/mp4"){
+    const config = (typeof window !== "undefined" && window.__VEO_CONFIG__) || {};
+    if(config.proxy_url !== undefined && config.client_token){
+      return `${config.proxy_url || ""}/api/veo/download?token=${encodeURIComponent(config.client_token)}&uri=${encodeURIComponent(uri)}`;
+    }
+  }
+  return uri;
+}
+
+function cssAspectRatio(value){
+  if(value === undefined || value === null || value === "") return "";
+  if(typeof value === "number" && Number.isFinite(value) && value > 0) return `${value} / 1`;
+  const raw = String(value).trim();
+  const colon = raw.match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if(colon) return `${colon[1]} / ${colon[2]}`;
+  const slash = raw.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+  if(slash) return `${slash[1]} / ${slash[2]}`;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) && numeric > 0 ? `${numeric} / 1` : "";
+}
+
+function mediaAspectRatio(width, height){
+  const w = Number(width);
+  const h = Number(height);
+  if(!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return "";
+  return `${Math.round(w)} / ${Math.round(h)}`;
+}
+
 async function nanoBananaAnalyze(imageDataUrl, meta){
   const imageInfo = await loadImageInfo(imageDataUrl).catch(() => null);
   const imageName = (meta && meta.imageName) || "uploaded reference";
@@ -700,6 +833,82 @@ function TagRow({ data }){
   `;
 }
 
+function modelRunPanel({ data, id, color, updateData }){
+  const estimate = (data && data.model_estimate) || {};
+  const running = data && data.model_generation_status === "running";
+  const error = data && data.model_generation_error;
+  const totalCredits = estimate.total_credits !== undefined ? estimate.total_credits : 0;
+  const money = estimate.total_local !== undefined
+    ? formatMoney(estimate.total_local, estimate.currency || "USD")
+    : (estimate.total_usd !== undefined ? formatMoney(estimate.total_usd, "USD") : "--");
+  return html`
+    <div className="modelRunColumn nodrag">
+      <button
+        className=${"modelGenerateBtn " + (running ? "running" : "")}
+        disabled=${running}
+        title="Compile this model payload and submit it through the local API proxy"
+        onClick=${(e)=>{ e.preventDefault(); e.stopPropagation(); requestModelGeneration(id); }}
+      >${running ? "RUNNING" : "GENERATE"}</button>
+      <div className="modelEstimateText">
+        <span>${formatCredits(totalCredits)} cr</span>
+        <strong>${money}</strong>
+      </div>
+      ${error ? html`<div className="modelRunError">${error}</div>` : null}
+    </div>
+  `;
+}
+
+function modelResultTray({ data, color, updateData }){
+  const outputs = (data && data.model_outputs) || [];
+  const safeIndex = Math.max(0, Math.min(outputs.length - 1, Number((data && data.model_output_index) || 0)));
+  const current = outputs[safeIndex] || null;
+  const previewSrc = modelOutputPreviewSrc(current);
+  const previewAspect = cssAspectRatio(current && (current.preview_aspect_ratio || current.aspect_ratio)) || cssAspectRatio(data && data.aspect) || "16 / 9";
+  const running = data && data.model_generation_status === "running";
+  const error = data && data.model_generation_error;
+  const moveOutput = (delta) => {
+    if(outputs.length < 2) return;
+    const next = (safeIndex + delta + outputs.length) % outputs.length;
+    updateData({ model_output_index:next }, []);
+  };
+  const updateOutputAspect = (ratio) => {
+    if(!current || !ratio || current.preview_aspect_ratio === ratio) return;
+    const nextOutputs = outputs.map((output, index) => index === safeIndex ? Object.assign({}, output, { preview_aspect_ratio:ratio }) : output);
+    updateData({ model_outputs:nextOutputs }, []);
+  };
+  const onImageLoad = (e) => {
+    const target = e.currentTarget || {};
+    updateOutputAspect(mediaAspectRatio(target.naturalWidth, target.naturalHeight));
+  };
+  const onVideoMetadata = (e) => {
+    const target = e.currentTarget || {};
+    updateOutputAspect(mediaAspectRatio(target.videoWidth, target.videoHeight));
+  };
+  if(!(outputs.length || running || error)) return null;
+  return html`
+    <div className="modelResultTray nodrag" style=${{borderColor: color}}>
+      <div className="modelResultPreview" style=${{aspectRatio:previewAspect}}>
+        ${current && previewSrc ? (
+          current.kind === "video" || current.mime_type === "video/mp4"
+            ? html`<video src=${previewSrc} controls muted playsInline onLoadedMetadata=${onVideoMetadata}></video>`
+            : html`<img src=${previewSrc} alt="" onLoad=${onImageLoad} />`
+        ) : html`<div className="modelResultEmpty">${running ? "Generating..." : "No preview"}</div>`}
+      </div>
+      <div className="modelResultFooter">
+        <button disabled=${outputs.length < 2} onClick=${(e)=>{ e.preventDefault(); e.stopPropagation(); moveOutput(-1); }}>${"<"}</button>
+        <span>${outputs.length ? `${safeIndex + 1} of ${outputs.length}` : "0 of 0"}</span>
+        <button disabled=${outputs.length < 2} onClick=${(e)=>{ e.preventDefault(); e.stopPropagation(); moveOutput(1); }}>${">"}</button>
+      </div>
+      ${current ? html`
+        <div className="modelResultMeta">
+          <span>${current.completed_at ? new Date(current.completed_at).toLocaleString() : ""}</span>
+          <span>${current.actual_cost_local !== undefined && current.actual_cost_local !== null ? formatMoney(current.actual_cost_local, current.currency || "USD") : "actual cost pending"}</span>
+        </div>
+      ` : null}
+    </div>
+  `;
+}
+
 function ModelNode({ data, id }){
   const { setNodes } = useReactFlow();
   const color = NODE_COLORS["model"] || "#888";
@@ -707,9 +916,11 @@ function ModelNode({ data, id }){
   const selectedCaps = MODEL_CATALOG[selectedModel] || MODEL_CATALOG["Veo 3.1 Quality"];
   const seconds = [4, 6, 8].includes(Number(data && data.seconds_per_clip)) ? Number(data.seconds_per_clip) : 8;
   const resolution = normalizeVeoResolution(data && data.resolution);
+  const aspect = normalizeModelAspect(data && data.aspect);
   const fps = clampInt(data && data.fps, 1, 120, 24);
   const batch = normalizeModelBatch(data && data.batch, "model");
   const audioEnabled = !!(data && data.audio_enabled && selectedCaps.supports_audio);
+  const promptOpen = !!(data && data.prompt_open);
   const updateData = (patch, manualKeys) => {
     const keys = manualKeys || Object.keys(patch || {});
     setNodes(nds => nds.map(n => {
@@ -724,7 +935,7 @@ function ModelNode({ data, id }){
     updateData({ model_ver:modelVer, audio_enabled: nextCaps.supports_audio ? audioEnabled : false });
   };
   return html`
-    <div className="nodeBox nodeModelGrid" style=${{borderColor: color}}>
+    <div className=${"nodeBox nodeModelGrid " + (promptOpen ? "nodeModelExpanded" : "")} style=${{borderColor: color}}>
       <div className="modelInputsRowTop">
         <span key="start" className="nodeMuted">Start Frame</span>
         <span key="end" className="nodeMuted">End Frame</span>
@@ -732,13 +943,11 @@ function ModelNode({ data, id }){
         <span key="asset2" className="nodeMuted">Asset 2</span>
         <span key="style" className="nodeMuted">Style</span>
       </div>
-      <${Handle} key="start-handle" type="target" position=${Position.Top} id="start" style=${{left:"36px"}} />
-      <${Handle} key="end-handle" type="target" position=${Position.Top} id="end" style=${{left:"108px"}} />
-      <${Handle} key="asset1-handle" type="target" position=${Position.Top} id="asset1" style=${{left:"180px"}} />
-      <${Handle} key="asset2-handle" type="target" position=${Position.Top} id="asset2" style=${{left:"252px"}} />
-      <${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"324px"}} />
-      <${Handle} key="params-handle" type="target" position=${Position.Left} id="params" style=${{top:"108px", background:NODE_COLORS.param}} />
-      <div className="modelParamPortLabel">Params</div>
+      <${Handle} key="start-handle" type="target" position=${Position.Top} id="start" style=${{left:"72px"}} />
+      <${Handle} key="end-handle" type="target" position=${Position.Top} id="end" style=${{left:"162px"}} />
+      <${Handle} key="asset1-handle" type="target" position=${Position.Top} id="asset1" style=${{left:"252px"}} />
+      <${Handle} key="asset2-handle" type="target" position=${Position.Top} id="asset2" style=${{left:"342px"}} />
+      <${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"432px"}} />
       <div className="nodeHeaderRow modelNodeHeaderRow">
         <div className="nodeHeaderText">
           <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>VEO</div>
@@ -768,6 +977,13 @@ function ModelNode({ data, id }){
             </select>
           </label>
           <label>
+            <span>Aspect</span>
+            <select value=${aspect} onChange=${(e)=>updateData({ aspect:e.target.value })}>
+              <option value="16:9">16:9</option>
+              <option value="9:16">9:16</option>
+            </select>
+          </label>
+          <label>
             <span>FPS</span>
             <input type="number" min="1" max="120" step="1" value=${fps} onInput=${(e)=>updateData({ fps: clampInt(e.target.value, 1, 120, 24) })} />
           </label>
@@ -781,7 +997,24 @@ function ModelNode({ data, id }){
           </label>
         </div>
       </div>
-      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{left:"180px"}} />
+      ${promptOpen ? html`
+        <div className="modelPromptPanel nodrag">
+          <textarea
+            className="modelPromptTextarea nodrag"
+            placeholder="Model prompt..."
+            value=${(data && data.prompt) || ""}
+            onInput=${(e)=>updateData({ prompt:e.target.value }, ["prompt"])}
+          ></textarea>
+        </div>
+      ` : null}
+      ${modelResultTray({ data, color, updateData })}
+      ${modelRunPanel({ data, id, color, updateData })}
+      <button
+        className="modelExpandBtn nodrag"
+        title=${promptOpen ? "Collapse model prompt" : "Open model prompt"}
+        onClick=${(e)=>{ e.preventDefault(); e.stopPropagation(); updateData({ prompt_open:!promptOpen }, []); }}
+      >${promptOpen ? "^" : "v"}</button>
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{left:"252px"}} />
     </div>
   `;
 }
@@ -801,11 +1034,13 @@ function OmniModelNode({ data, id }){
   const selectedModel = (data && data.model_ver) || "Gemini Omni Flash";
   const seconds = Number((data && data.length_seconds) || 10);
   const resolution = String((data && data.resolution) || "4K");
+  const aspect = normalizeModelAspect(data && data.aspect);
   const fps = Number((data && data.fps) || 24);
   const batch = normalizeModelBatch(data && data.batch, "omni_model");
   const audioEnabled = !!(data && data.audio_enabled);
+  const promptOpen = !!(data && data.prompt_open);
   return html`
-    <div className="nodeBox nodeOmniGrid" style=${{borderColor: color}}>
+    <div className=${"nodeBox nodeOmniGrid " + (promptOpen ? "nodeModelExpanded" : "")} style=${{borderColor: color}}>
       <div className="omniInputsRowTop">
         <span className="nodeMuted">Photo 1</span>
         <span className="nodeMuted">Photo 2</span>
@@ -818,12 +1053,10 @@ function OmniModelNode({ data, id }){
       ${["photo1","photo2","photo3","photo4","photo5","video","audio"].map((handle, index) => html`
         <${Handle} key=${handle + "-handle"} type="target" position=${Position.Top} id=${handle} style=${{left:(36 + index * 72) + "px"}} />
       `)}
-      <${Handle} key="params-handle" type="target" position=${Position.Left} id="params" style=${{top:"108px", background:NODE_COLORS.param}} />
-      <div className="modelParamPortLabel">Params</div>
       <div className="nodeHeaderRow modelNodeHeaderRow">
         <div className="nodeHeaderText">
           <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>GOOGLE OMNI</div>
-          <div className="nodeSub">Text, photos, video, audio → video</div>
+          <div className="nodeSub">Text, photos, video, audio -> video</div>
         </div>
       </div>
       <div className="omniControls nodrag">
@@ -844,6 +1077,13 @@ function OmniModelNode({ data, id }){
             </select>
           </label>
           <label>
+            <span>Aspect</span>
+            <select value=${aspect} onChange=${(e)=>updateData({ aspect:e.target.value })}>
+              <option value="16:9">16:9</option>
+              <option value="9:16">9:16</option>
+            </select>
+          </label>
+          <label>
             <span>FPS</span>
             <input type="number" min="12" max="60" step="1" value=${fps} onInput=${(e)=>updateData({ fps: Math.max(12, Math.min(60, Number(e.target.value || 24))) })} />
           </label>
@@ -857,8 +1097,50 @@ function OmniModelNode({ data, id }){
           </label>
         </div>
       </div>
-      <div className="nodeMuted omniNote">No official hard start/end-frame contract found; use Photo/Video refs for frame guidance.</div>
+      ${promptOpen ? html`
+        <div className="modelPromptPanel nodrag">
+          <textarea
+            className="modelPromptTextarea nodrag"
+            placeholder="Model prompt..."
+            value=${(data && data.prompt) || ""}
+            onInput=${(e)=>updateData({ prompt:e.target.value }, ["prompt"])}
+          ></textarea>
+        </div>
+      ` : null}
+      ${modelResultTray({ data, color, updateData })}
+      ${modelRunPanel({ data, id, color, updateData })}
+      <button
+        className="modelExpandBtn nodrag"
+        title=${promptOpen ? "Collapse model prompt" : "Open model prompt"}
+        onClick=${(e)=>{ e.preventDefault(); e.stopPropagation(); updateData({ prompt_open:!promptOpen }, []); }}
+      >${promptOpen ? "^" : "v"}</button>
       <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{background:color, left:"252px"}} />
+    </div>
+  `;
+}
+
+function TextUtilNode({ data, id }){
+  const { setNodes } = useReactFlow();
+  const color = NODE_COLORS.text_util;
+  const onPromptChange = (e) => {
+    const value = e.target.value;
+    setNodes(nds => nds.map(n => n.id === id ? Object.assign({}, n, { data: Object.assign({}, n.data, { prompt:value }) }) : n));
+  };
+  return html`
+    <div className="nodeBox nodeTextUtilGrid" style=${{borderColor: color}}>
+      <div className="nodeHeaderRow">
+        <div className="nodeHeaderText">
+          <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>TEXT</div>
+        </div>
+      </div>
+      <textarea
+        className="textUtilTextarea nodrag"
+        placeholder="Prompt..."
+        value=${(data && data.prompt) || ""}
+        onInput=${onPromptChange}
+      ></textarea>
+      <${Handle} key="in-handle" type="target" position=${Position.Top} id="in" style=${{left:"126px"}} />
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{background:color, left:"126px"}} />
     </div>
   `;
 }
@@ -880,19 +1162,6 @@ function BaseNode({ data, type, id }){
   const showPromptBox = ["face","body","clothing","pose"].includes(type);
   const onPromptChange = (e) => {
      setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, prompt: e.target.value } } : n));
-  };
-  const onParamKindChange = (e) => {
-    const nextDef = PARAMETER_DEFS.find(def => def.param_key === e.target.value) || PARAMETER_DEFS[0];
-    setNodes(nds => nds.map(n => n.id === id ? {
-      ...n,
-      data: {
-        ...n.data,
-        title: nextDef.title,
-        subtitle: nextDef.note,
-        param_key: nextDef.param_key,
-        param_val: nextDef.default_val
-      }
-    } : n));
   };
   const onParamValueChange = (e) => {
     const raw = e.target.value;
@@ -932,7 +1201,7 @@ function BaseNode({ data, type, id }){
       <div className="nodeHeaderRow">
         <div className="nodeHeaderText">
           <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>${isParam ? paramDef.title : ((data && data.title) || "Node")}</div>
-          ${type === "ref" || isLensParam ? null : html`<div className="nodeSub">${isParam ? "Cinematography parameter" : ((data && data.subtitle) || "")}</div>`}
+          ${type === "ref" || isParam ? null : html`<div className="nodeSub">${(data && data.subtitle) || ""}</div>`}
           ${(data && data.badge) ? html`<div className="nodeMuted" style=${{marginTop:"4px"}}>${data.badge}</div>` : null}
         </div>
       </div>
@@ -963,25 +1232,25 @@ function BaseNode({ data, type, id }){
         <div className="paramControlPanel lensControlPanel nodrag">
           <label>
             <span>Focal Length</span>
-            <select value=${lensValues.focal_length} onChange=${(e)=>onLensParamChange("focal_length", e.target.value)}>
+            <select style=${{width:selectWidthForLabels(FOCAL_LENGTH_OPTIONS)}} value=${lensValues.focal_length} onChange=${(e)=>onLensParamChange("focal_length", e.target.value)}>
               ${FOCAL_LENGTH_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
             </select>
           </label>
           <label>
             <span>Aperture</span>
-            <select value=${lensValues.aperture} onChange=${(e)=>onLensParamChange("aperture", e.target.value)}>
+            <select style=${{width:selectWidthForLabels(APERTURE_OPTIONS)}} value=${lensValues.aperture} onChange=${(e)=>onLensParamChange("aperture", e.target.value)}>
               ${APERTURE_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
             </select>
           </label>
           <label>
             <span>Lens Effects</span>
-            <select value=${lensValues.lens_effect} onChange=${(e)=>onLensParamChange("lens_effect", e.target.value)}>
+            <select style=${{width:selectWidthForLabels(LENS_EFFECT_OPTIONS)}} value=${lensValues.lens_effect} onChange=${(e)=>onLensParamChange("lens_effect", e.target.value)}>
               ${LENS_EFFECT_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
             </select>
           </label>
           <label>
             <span>Shutter Effects</span>
-            <select value=${lensValues.shutter_effect} onChange=${(e)=>onLensParamChange("shutter_effect", e.target.value)}>
+            <select style=${{width:selectWidthForLabels(SHUTTER_EFFECT_OPTIONS)}} value=${lensValues.shutter_effect} onChange=${(e)=>onLensParamChange("shutter_effect", e.target.value)}>
               ${SHUTTER_EFFECT_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
             </select>
           </label>
@@ -989,18 +1258,11 @@ function BaseNode({ data, type, id }){
       ` : isParam ? html`
         <div className="paramControlPanel nodrag">
           <label>
-            <span>Parameter</span>
-            <select value=${paramDef.param_key} onChange=${onParamKindChange}>
-              ${PARAMETER_DEFS.map(def => html`<option key=${def.param_key} value=${def.param_key}>${def.title}</option>`)}
-            </select>
-          </label>
-          <label>
-            <span>Value</span>
-            <select value=${data && data.param_val !== undefined ? data.param_val : paramDef.default_val} onChange=${onParamValueChange}>
+            <span>${paramDef.title}</span>
+            <select style=${{width:parameterSelectWidth(paramDef)}} value=${data && data.param_val !== undefined ? data.param_val : paramDef.default_val} onChange=${onParamValueChange}>
               ${paramDef.options.map(option => html`<option key=${String(option)} value=${option}>${parameterValueLabel(paramDef, option)}</option>`)}
             </select>
           </label>
-          <div className="paramControlNote">${paramDef.note}</div>
         </div>
       ` : html`<${TagRow} data=${data} />`}
 
@@ -1010,7 +1272,7 @@ function BaseNode({ data, type, id }){
          </div>
       ` : null}
 
-      ${isLensParam ? html`<${Handle} key="lens-in-handle" type="target" position=${Position.Top} id="in" style=${{left:"144px", top:"3px"}} />` : isParam ? null : hasMultiInputs ? html`<${Handle} key="asset-handle" type="target" position=${Position.Top} id="asset" style=${{left:"72px"}} /><${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"144px"}} />` : html`<${Handle} key="in-handle" type="target" position=${Position.Top} id="in" style=${{left:"108px"}} />`}
+      ${isLensParam ? html`<${Handle} key="lens-in-handle" type="target" position=${Position.Top} id="in" style=${{left:"144px", top:"3px"}} />` : isParam ? html`<${Handle} key="param-in-handle" type="target" position=${Position.Top} id="in" style=${{left:(SIMPLE_PARAM_NODE_WIDTH / 2) + "px"}} />` : hasMultiInputs ? html`<${Handle} key="asset-handle" type="target" position=${Position.Top} id="asset" style=${{left:"72px"}} /><${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"144px"}} />` : html`<${Handle} key="in-handle" type="target" position=${Position.Top} id="in" style=${{left:"108px"}} />`}
       ${type === "ref" ? html`
         <div className="referenceAnalyzeNodeWrap nodrag">
           <button
@@ -1020,7 +1282,7 @@ function BaseNode({ data, type, id }){
           >${refAnalyzed ? "RE-ANALYZE" : "ANALYZE"}</button>
         </div>
       ` : null}
-      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${isLensParam ? {left:"144px", bottom:"3px"} : {left:"108px"}} />
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${isLensParam ? {left:"144px", bottom:"3px"} : (isParam ? {left:(SIMPLE_PARAM_NODE_WIDTH / 2) + "px"} : {left:"108px"})} />
     </div>
   `;
 }
@@ -1242,6 +1504,7 @@ const nodeTypes = {
   clothing: (p)=>BaseNode({ ...p, type:"clothing" }),
   pose: (p)=>BaseNode({ ...p, type:"pose" }),
   param: (p)=>BaseNode({ ...p, type:"param" }),
+  text_util: TextUtilNode,
   clip: ClipNode
 };
 
@@ -1345,19 +1608,14 @@ function connectionCapacityIssue(conn, nodes, edges, caps){
   if(!capacity || !targetHandle) return null;
 
   const handleRule = capacity.handles[targetHandle];
-  if(handleRule){
-    const handleCount = edges.filter(e => e.target === conn.target && String(e.targetHandle || "") === targetHandle).length;
-    if(handleCount >= handleRule.max){
-      return { message: "That input is already connected." };
-    }
-  }
-
   if(handleRule && handleRule.group){
     const groupRule = capacity.groups[handleRule.group];
     const groupCount = edges.filter(e => (
-      e.target === conn.target && groupRule.handles.has(String(e.targetHandle || ""))
+      e.target === conn.target &&
+      groupRule.handles.has(String(e.targetHandle || "")) &&
+      String(e.targetHandle || "") !== targetHandle
     )).length;
-    if(groupCount >= groupRule.max){
+    if(groupCount + 1 > groupRule.max){
       return {
         message: groupRule.message,
         count: groupCount + 1,
@@ -1367,6 +1625,16 @@ function connectionCapacityIssue(conn, nodes, edges, caps){
   }
 
   return null;
+}
+
+function removeCompetingInputEdges(edges, conn, nodes, caps){
+  const targetHandle = String(conn && conn.targetHandle || "");
+  if(!conn || !conn.target || !targetHandle) return edges;
+  const target = nodes.find(n => n.id === conn.target);
+  const capacity = inputCapacityForNode(target, caps);
+  const handleRule = capacity && capacity.handles[targetHandle];
+  if(!handleRule || handleRule.max !== 1) return edges;
+  return edges.filter(edge => !(edge.target === conn.target && String(edge.targetHandle || "") === targetHandle));
 }
 
 function currentModelCapacityIssue(nodes, edges, caps){
@@ -1455,12 +1723,18 @@ function App(){
   const LS_KEY = "stage_umdv1";
   const IMAGE_DB_NAME = "stage_assets";
   const IMAGE_STORE_NAME = "images";
+  const RUN_STORE_NAME = "model_runs";
 
   function openImageDb(){
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(IMAGE_DB_NAME, 1);
+      const req = indexedDB.open(IMAGE_DB_NAME, 2);
       req.onupgradeneeded = () => {
-        req.result.createObjectStore(IMAGE_STORE_NAME);
+        if(!req.result.objectStoreNames.contains(IMAGE_STORE_NAME)){
+          req.result.createObjectStore(IMAGE_STORE_NAME);
+        }
+        if(!req.result.objectStoreNames.contains(RUN_STORE_NAME)){
+          req.result.createObjectStore(RUN_STORE_NAME);
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error("IndexedDB open failed."));
@@ -1474,6 +1748,17 @@ function App(){
       tx.objectStore(IMAGE_STORE_NAME).put(dataUrl, key);
       tx.oncomplete = () => resolve(key);
       tx.onerror = () => reject(tx.error || new Error("Image save failed."));
+    });
+  }
+
+  async function saveModelRunRecord(record){
+    const db = await openImageDb();
+    const key = record && record.id ? record.id : `run:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(RUN_STORE_NAME, "readwrite");
+      tx.objectStore(RUN_STORE_NAME).put(Object.assign({}, record, { id:key }), key);
+      tx.oncomplete = () => resolve(key);
+      tx.onerror = () => reject(tx.error || new Error("Model run save failed."));
     });
   }
 
@@ -1708,12 +1993,14 @@ function nodeApproxSize(node){
   let width = Number(style.width || node?.width || measured.width || 216);
   let height = Number(style.height || node?.height || measured.height || 144);
   if(node && node.type === "model"){
-    width = Number(style.width || node.width || measured.width || 360);
-    height = Number(style.height || node.height || measured.height || 180);
+    const hasResultTray = !!((data.model_outputs && data.model_outputs.length) || data.model_generation_status === "running" || data.model_generation_error);
+    width = Number(style.width || node.width || measured.width || 504);
+    height = Number(style.height || node.height || measured.height || ((data.prompt_open ? 378 : 198) + (hasResultTray ? 230 : 0)));
   }
   if(node && node.type === "omni_model"){
+    const hasResultTray = !!((data.model_outputs && data.model_outputs.length) || data.model_generation_status === "running" || data.model_generation_error);
     width = Number(style.width || node.width || measured.width || 504);
-    height = Number(style.height || node.height || measured.height || 180);
+    height = Number(style.height || node.height || measured.height || ((data.prompt_open ? 378 : 198) + (hasResultTray ? 230 : 0)));
   }
   if(node && isGeneratorType(node.type)){
     width = Number(style.width || node.width || measured.width || 216);
@@ -1724,8 +2011,12 @@ function nodeApproxSize(node){
     height = Number(style.height || node.height || measured.height || 216);
   }
   if(node && node.type === "param"){
-    width = Number(style.width || node.width || measured.width || ((node.data && node.data.param_key) === "lens" ? 288 : 216));
-    height = Number(style.height || node.height || measured.height || ((node.data && node.data.param_key) === "lens" ? 288 : 180));
+    width = Number(style.width || node.width || measured.width || ((node.data && node.data.param_key) === "lens" ? 288 : SIMPLE_PARAM_NODE_WIDTH));
+    height = Number(style.height || node.height || measured.height || ((node.data && node.data.param_key) === "lens" ? 288 : SIMPLE_PARAM_NODE_HEIGHT));
+  }
+  if(node && node.type === "text_util"){
+    width = Number(style.width || node.width || measured.width || 252);
+    height = Number(style.height || node.height || measured.height || 198);
   }
   if(node && node.type === "nano_banana"){
     width = Number(style.width || node.width || measured.width || 396);
@@ -1809,12 +2100,10 @@ function handleRatioForNode(node, handleId, kind){
   const id = String(handleId || "");
   if(kind === "source") return { x:.5, y:1 };
   if(node && node.type === "model"){
-    if(id === "params") return { x:0, y:.6 };
     const ratios = { start:.1, end:.3, asset1:.5, asset2:.7, style:.9 };
     return { x: ratios[id] || .5, y:0 };
   }
   if(node && node.type === "omni_model"){
-    if(id === "params") return { x:0, y:.6 };
     const index = omniInputHandles.indexOf(id);
     if(index >= 0) return { x:(36 + index * 72) / 504, y:0 };
   }
@@ -1862,6 +2151,32 @@ function sampledPolylineHit(rect, points){
   return hit ? best : null;
 }
 
+function cubicPoint(a, c1, c2, b, t){
+  const mt = 1 - t;
+  return {
+    x: (mt * mt * mt * a.x) + (3 * mt * mt * t * c1.x) + (3 * mt * t * t * c2.x) + (t * t * t * b.x),
+    y: (mt * mt * mt * a.y) + (3 * mt * mt * t * c1.y) + (3 * mt * t * t * c2.y) + (t * t * t * b.y)
+  };
+}
+
+function sampledBezierHit(rect, start, end){
+  const center = rectCenter(rect);
+  const vertical = Math.abs(end.y - start.y);
+  const offset = Math.max(40, vertical * 0.5);
+  const c1 = { x:start.x, y:start.y + offset };
+  const c2 = { x:end.x, y:end.y - offset };
+  let best = Infinity;
+  let hit = false;
+  for(let i = 0; i <= 48; i += 1){
+    const point = cubicPoint(start, c1, c2, end, i / 48);
+    if(pointInRect(point, rect)){
+      hit = true;
+      best = Math.min(best, distance(point, center));
+    }
+  }
+  return hit ? best : null;
+}
+
 function edgeFlowHitScore(edge, rect, nodes){
   const source = nodes.find(n => n.id === edge.source);
   const target = nodes.find(n => n.id === edge.target);
@@ -1872,7 +2187,10 @@ function edgeFlowHitScore(edge, rect, nodes){
     const midY = start.y + (end.y - start.y) / 2;
     return sampledPolylineHit(rect, [start, { x:start.x, y:midY }, { x:end.x, y:midY }, end]);
   }
-  return sampledPolylineHit(rect, [start, end]);
+  if(edge.type === "straight"){
+    return sampledPolylineHit(rect, [start, end]);
+  }
+  return sampledBezierHit(rect, start, end);
 }
 
 function edgePatchInputHandle(node, edges){
@@ -2354,11 +2672,11 @@ function findWirePatchCandidate(node){
     };
 
     setNodes(nds => nds.concat([node]));
-    setEdges(eds => addEdge(edge, eds));
+    setEdges(eds => addEdge(edge, removeCompetingInputEdges(eds, edge, nodes, caps)));
     setSelectedIds([id]);
     setSmartConnect(null);
     logLine("INFO", `${nowTime()} Smart connect: added ${option.title} to ${label || smart.targetHandle}.`);
-  }, [rfApi, setEdges, setNodes, snapEnabled]);
+  }, [rfApi, setEdges, setNodes, snapEnabled, nodes, caps]);
 
   React.useEffect(() => {
     if(!smartConnect) return;
@@ -2459,15 +2777,16 @@ function findWirePatchCandidate(node){
     // If the target handle looks like an indexed input (e.g. in_0, in_1...), attach a centered label like "Input 1".
     const th = String(conn && conn.targetHandle ? conn.targetHandle : "");
     const label = labelForIndexedInput(th);
-    setEdges((eds) => addEdge({ 
-      ...conn, 
+    const edge = {
+      ...conn,
       type: connectionEdgeType(),
       label: label || undefined,
       labelStyle: label ? { fill: "#FFD700", fontWeight: 700, fontSize: 10 } : undefined,
       labelBgStyle: label ? { fill: "rgba(0,0,0,0.6)", stroke: "#444", strokeWidth: 1 } : undefined,
       labelBgPadding: label ? [6, 3] : undefined,
       labelBgBorderRadius: label ? 999 : undefined
-    }, eds));
+    };
+    setEdges((eds) => addEdge(edge, removeCompetingInputEdges(eds, edge, nodes, caps)));
     setSmartConnect(null);
   }, [nodes, edges, caps, setEdges, showToast]);
 
@@ -2509,7 +2828,7 @@ function findWirePatchCandidate(node){
     if(key && key.indexOf("param_") === 0) type = "param";
     if(key==="param_batch_4") dataPatch = { title:"Batch", subtitle:"Veo max output videos per prompt is 4.", param_key:"batch", param_val:1 };
     if(key==="param_length_8") dataPatch = { title:"Length", subtitle:"Veo accepts 4, 6, or 8 seconds; 10s is kept for Omni intent.", param_key:"length_seconds", param_val:8 };
-    if(key==="param_fps_24") dataPatch = { title:"FPS", subtitle:"Veo 3.1 submits at 24 FPS; higher values are Omni/style intent.", param_key:"fps", param_val:24 };
+    if(key==="param_fps_24") dataPatch = { title:"Framerate", subtitle:"Veo 3.1 submits at 24 FPS; higher values are Omni/style intent.", param_key:"fps", param_val:24 };
     if(key==="param_aspect_16_9") dataPatch = { title:"Aspect", subtitle:"Veo 3.1 accepts landscape or portrait.", param_key:"aspect", param_val:"16:9" };
     if(key==="param_res_hd") dataPatch = { title:"Resolution", subtitle:"Veo 3.1 supports 720p, 1080p, and 4K preview output.", param_key:"res", param_val:"1080p" };
     if(key==="param_lens") dataPatch = { title:"Lens", subtitle:"Optics, depth of field, and shutter intent.", param_key:"lens", param_values:lensParamValues({}), focal_length:"35mm", aperture:"f/2.8", lens_effect:"None", shutter_effect:"Natural Motion Blur" };
@@ -2517,19 +2836,24 @@ function findWirePatchCandidate(node){
   }
 
   function canvasFlowPointFromDragEvent(event){
+    if(rfApi && typeof rfApi.screenToFlowPosition === "function"){
+      return rfApi.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    }
     const bounds = event.currentTarget.getBoundingClientRect();
-    return rfApi.screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+    return rfApi.project({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
   }
 
   function virtualLibraryNodeForEvent(event, key){
     if(!key) return null;
     const spec = libraryNodeSpec(key);
     if(!spec.type || spec.type === "clip") return null;
+    const data = Object.assign({}, defaultPropsFor(spec.type), spec.dataPatch || {});
     const point = canvasFlowPointFromDragEvent(event);
-    const size = nodeApproxSize({ type: spec.type });
+    const size = nodeApproxSize({ type: spec.type, data });
     return {
       id: "__library_drag_preview__",
       type: spec.type,
+      data,
       position: {
         x: point.x - size.width / 2,
         y: point.y - size.height / 2
@@ -2587,7 +2911,10 @@ function findWirePatchCandidate(node){
     const virtualNode = virtualLibraryNodeForEvent(event, key);
     const patchCandidate = virtualNode ? findWirePatchCandidate(virtualNode) : null;
     const patchEdge = patchCandidate ? edges.find(edge => edge.id === patchCandidate.edgeId) : null;
-    const size = nodeApproxSize({ type });
+    const base = defaultPropsFor(type);
+    const palette = PALETTE.find(p => p.key === key);
+    const nodeData = Object.assign({}, base, dataPatch, { tags: (palette && palette.tags) ? palette.tags : (base.tags || []) });
+    const size = nodeApproxSize({ type, data:nodeData });
     const position = patchEdge
       ? snapFlowPosition({ x: dropPoint.x - size.width / 2, y: dropPoint.y - size.height / 2 }, snapEnabled)
       : snapFlowPosition(dropPoint, snapEnabled);
@@ -2607,9 +2934,7 @@ if(type==="clip"){
       return;
     }
     const id = makeId(type);
-    const base = defaultPropsFor(type);
-    const palette = PALETTE.find(p => p.key === key);
-    const n = { id, type, position, data: Object.assign({}, base, dataPatch, { tags: (palette && palette.tags) ? palette.tags : (base.tags || []) }) };
+    const n = { id, type, position, data: nodeData };
     if(type === "ref"){
       setNodes(nds => nds.map(existing => (
         isCascadeTargetType(existing.type)
@@ -2709,6 +3034,30 @@ if(type==="clip"){
     return estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady);
   }, [nodes, edges, modelProps, caps, referenceGateReady]);
 
+  React.useEffect(() => {
+    setNodes(nds => {
+      let changed = false;
+      const next = nds.map(node => {
+        if(!node || (node.type !== "model" && node.type !== "omni_model")) return node;
+        const props = (node.data) || defaultPropsFor(node.type);
+        const nodeCaps = MODEL_CATALOG[props.model_ver] || MODEL_CATALOG["Veo 3.1 Quality"];
+        const estimate = estimateGraphCredits(nds, edges, props, nodeCaps, referenceGateReady);
+        const compact = {
+          total_credits: estimate.total_credits,
+          total_usd: estimate.total_usd,
+          total_local: estimate.total_local,
+          currency: estimate.currency,
+          sections: estimate.sections,
+          ready: estimate.ready
+        };
+        if(JSON.stringify((node.data && node.data.model_estimate) || null) === JSON.stringify(compact)) return node;
+        changed = true;
+        return Object.assign({}, node, { data:Object.assign({}, node.data, { model_estimate:compact }) });
+      });
+      return changed ? next : nds;
+    });
+  }, [nodes, edges, referenceGateReady, setNodes]);
+
   async function onRefImageChange(file, refId){
     const refNode = refId ? nodes.find(n => n.id === refId) : selectedPrimary;
     if(!file || !refNode || refNode.type !== "ref") return;
@@ -2769,7 +3118,8 @@ if(type==="clip"){
       const edge = edges.find(e => e.target === nanoNode.id && String(e.targetHandle || "") === handleId);
       const role = i < 6 ? "high_fidelity" : "supplementary";
       if(edge){
-        const source = nodes.find(n => n.id === edge.source);
+        const edgeSource = nodes.find(n => n.id === edge.source);
+        const source = edgeSource && isPipeUtilityType(edgeSource.type) ? firstNonUtilitySourceNode(edgeSource.id, nodes, edges) || edgeSource : edgeSource;
         const dataUrl = source ? await imageDataForNode(source).catch(() => null) : null;
         if(dataUrl){
           images.push({
@@ -2778,6 +3128,8 @@ if(type==="clip"){
             role,
             source_node_id: source.id,
             source_type: source.type,
+            pipe_entry_node_id: edge.source,
+            pipe_entry_type: edgeSource ? edgeSource.type : "unknown",
             data_url: dataUrl
           });
         }
@@ -2814,8 +3166,10 @@ if(type==="clip"){
     }).filter(Boolean);
     const cascadePrompt = (nanoNode.data && nanoNode.data.cascade_prompt) || nodeCascadePrompt(refAnalysis, "nano_banana");
     const userPrompt = (nanoNode.data && nanoNode.data.prompt) || "";
+    const upstreamPrompt = upstreamTextPrompts(nanoNode.id, nodes, edges).join("\n");
     const imageLines = images.map(img => `Input ${img.slot} (${img.role}): ${img.label}`).join("\n");
     return [
+      upstreamPrompt,
       cascadePrompt,
       refAnalysis && refAnalysis.identity_profile ? `Identity profile: ${refAnalysis.identity_profile.summary}` : "",
       upstreamLines.length ? "Connected upstream context:\n" + upstreamLines.join("\n") : "",
@@ -2883,13 +3237,19 @@ if(type==="clip"){
       const nodeId = event && event.detail && event.detail.nodeId;
       if(nodeId) runNanoBananaGeneration(nodeId);
     }
+    function onModelGenerate(event){
+      const nodeId = event && event.detail && event.detail.nodeId;
+      if(nodeId) runModelNodeGeneration(nodeId);
+    }
     window.addEventListener("stage:upload-reference", onReferenceUpload);
     window.addEventListener("stage:analyze-reference", onReferenceAnalyze);
     window.addEventListener("stage:nano-generate", onNanoGenerate);
+    window.addEventListener("stage:model-generate", onModelGenerate);
     return () => {
       window.removeEventListener("stage:upload-reference", onReferenceUpload);
       window.removeEventListener("stage:analyze-reference", onReferenceAnalyze);
       window.removeEventListener("stage:nano-generate", onNanoGenerate);
+      window.removeEventListener("stage:model-generate", onModelGenerate);
     };
   }, [nodes, edges, selectedPrimary]);
 
@@ -2979,38 +3339,34 @@ if(type==="clip"){
   function connectedInputsForModelNode(targetModel){
     if(!targetModel) return [];
     const order = targetModel.type === "omni_model"
-      ? ["params"].concat(omniInputHandles)
-      : ["params", "start", "end", "asset1", "asset2", "style"];
+      ? omniInputHandles
+      : ["start", "end", "asset1", "asset2", "style"];
     return edges
       .filter(edge => edge.target === targetModel.id)
       .slice()
       .sort((a, b) => order.indexOf(String(a.targetHandle || "")) - order.indexOf(String(b.targetHandle || "")))
       .map(edge => {
         const source = nodes.find(n => n.id === edge.source);
-        const sourceData = (source && source.data) || {};
+        const mediaSource = source && isPipeUtilityType(source.type) ? firstNonUtilitySourceNode(source.id, nodes, edges) || source : source;
+        const sourceData = (mediaSource && mediaSource.data) || {};
         const handle = String(edge.targetHandle || "");
         const role = targetModel.type === "omni_model"
-          ? (handle === "params" ? "parameter" : (omniPhotoHandles.has(handle) ? "photo_reference" : handle))
-          : (handle === "params" ? "parameter" : handle);
+          ? (omniPhotoHandles.has(handle) ? "photo_reference" : handle)
+          : handle;
         const descriptionRole = targetModel.type === "omni_model"
           ? (role === "photo_reference" ? "asset" : "style")
           : (role === "style" ? "style" : "asset");
         return {
           handle,
           role,
-          source_node_id: edge.source,
-          source_type: source ? source.type : "unknown",
+          source_node_id: mediaSource ? mediaSource.id : edge.source,
+          source_type: mediaSource ? mediaSource.type : "unknown",
+          pipe_entry_node_id: edge.source,
+          pipe_entry_type: source ? source.type : "unknown",
           gcs_uri: sourceData.gcs_uri || sourceData.output_last_frame_uri || sourceData.result_uri || null,
           mime_type: sourceData.mime_type || (role === "video" ? "video/mp4" : (role === "audio" ? "audio/mpeg" : "image/jpeg")),
-          param_key: source && source.type === "param" ? sourceData.param_key || null : null,
-          param_value: source && source.type === "param" ? sourceData.param_val : undefined,
-          param_values: source && source.type === "param" ? (sourceData.param_key === "lens" ? lensParamValues(sourceData) : sourceData.param_values || null) : null,
-          title: sourceData.title || sourceData.clip_name || (source ? source.type : edge.source),
-          description: source && source.type === "param"
-            ? (sourceData.param_key === "lens"
-              ? `lens=${lensParamValues(sourceData).focal_length}, ${lensParamValues(sourceData).aperture}, ${lensParamValues(sourceData).lens_effect}, ${lensParamValues(sourceData).shutter_effect}`
-              : `${sourceData.param_key || "param"}=${sourceData.param_val}`)
-            : source && source.type === "ref" && isAnalysisActivated(sourceData.analysis)
+          title: sourceData.title || sourceData.clip_name || (mediaSource ? mediaSource.type : edge.source),
+          description: mediaSource && mediaSource.type === "ref" && isAnalysisActivated(sourceData.analysis)
             ? referenceDescriptionFor(sourceData.analysis, descriptionRole)
             : (sourceData.cascade_prompt || sourceData.prompt || sourceData.subtitle || "")
         };
@@ -3047,10 +3403,13 @@ if(type==="clip"){
     const source = nodes.find(n => n.id === input.source_node_id);
     const data = (source && source.data) || {};
     if(input.role === "parameter" || (source && source.type === "param")){
+      const paramValues = source && source.type === "param"
+        ? (source.data && source.data.param_key === "lens" ? lensParamValues(source.data) : (source.data && source.data.param_values) || (source.data && source.data.param_key ? { [source.data.param_key]: source.data.param_val } : {}))
+        : (input.param_values || (input.param_key ? { [input.param_key]: input.param_value } : {}));
       return {
         kind: "parameter",
-        title: input.title || parameterTitleForKey(input.param_key),
-        values: input.param_values || (input.param_key ? { [input.param_key]: input.param_value } : {}),
+        title: input.title || parameterTitleForKey(input.param_key || (source && source.data && source.data.param_key)),
+        values: paramValues,
         prompt_fragment: input.description || null
       };
     }
@@ -3233,7 +3592,8 @@ if(type==="clip"){
       const edge = edges.find(e => e.target === nanoNode.id && String(e.targetHandle || "") === handleId);
       const role = i < 6 ? "high_fidelity" : "supplementary";
       if(edge){
-        const source = nodes.find(n => n.id === edge.source);
+        const edgeSource = nodes.find(n => n.id === edge.source);
+        const source = edgeSource && isPipeUtilityType(edgeSource.type) ? firstNonUtilitySourceNode(edgeSource.id, nodes, edges) || edgeSource : edgeSource;
         const data = (source && source.data) || {};
         const label = `${data.title || (source && source.type) || edge.source} -> slot ${i + 1}`;
         images.push({
@@ -3243,6 +3603,8 @@ if(type==="clip"){
           label,
           source_node_id: edge.source,
           source_type: source ? source.type : "unknown",
+          resolved_source_node_id: source ? source.id : edge.source,
+          pipe_entry_type: edgeSource ? edgeSource.type : "unknown",
           media: {
             gcs_uri: data.gcs_uri || data.result_uri || data.output_last_frame_uri || null,
             mime_type: data.mime_type || "image/jpeg",
@@ -3388,6 +3750,7 @@ if(type==="clip"){
         resolution,
         fps,
         batch,
+        model_prompt: clip && clip.generation_config ? clip.generation_config.model_prompt || null : null,
         native_audio: !!(ctxProps.audio_enabled && ctxCaps.supports_audio)
       },
       cinematography: {
@@ -3543,6 +3906,7 @@ if(type==="clip"){
         person_generation: params.personGeneration || "allow_adult",
         resize_mode: params.resizeMode || "pad"
       },
+      model_prompt: clip && clip.generation_config ? clip.generation_config.model_prompt || null : null,
       cinematography: {
         camera_directions: "Derived from connected Cinematography parameter nodes, prompt blocks, and frame/reference inputs.",
         focal_length: clip && clip.generation_config ? clip.generation_config.focal_length || "As it comes" : "As it comes",
@@ -3594,6 +3958,11 @@ if(type==="clip"){
     const modelId = targetCaps.id;
     const isOmniModel = !!(targetModelNode && targetModelNode.type === "omni_model");
     const modelInputs = connectedInputsForModelNode(targetModelNode);
+    const modelCascadeParams = targetModelNode ? incomingParams(targetModelNode.id, nodes, edges) : {};
+    const modelPromptText = [
+      targetModelNode ? upstreamTextPrompts(targetModelNode.id, nodes, edges).join(" ") : "",
+      targetModelProps.prompt || ""
+    ].map(value => String(value || "").trim()).filter(Boolean).join(" ");
     const secondsDefault = Math.max(1, Math.min(targetCaps.max_seconds || 30, Number(isOmniModel ? (targetModelProps.length_seconds || 10) : (targetModelProps.seconds_per_clip || 8))));
     const modelBatchDefault = normalizeModelBatch(targetModelProps.batch, isOmniModel ? "omni_model" : "model");
     const modelResolutionDefault = isOmniModel ? normalizeOmniResolution(targetModelProps.resolution || "4K") : normalizeVeoResolution(targetModelProps.resolution || "1080p");
@@ -3665,6 +4034,7 @@ if(type==="clip"){
         const lensEffect = String((ov.lens_effect !== undefined ? ov.lens_effect : "None"));
         const shutterEffect = String((ov.shutter_effect !== undefined ? ov.shutter_effect : "Natural Motion Blur"));
         const cascadePrompt = (g.data && g.data.cascade_prompt) || nodeCascadePrompt(refAnalysis, g.type);
+        const upstreamPrompt = upstreamTextPrompts(g.id, nodes, edges).join(" ");
         const userPrompt = (g.data && g.data.prompt) || "";
         const opticsPrompt = [
           focal !== "As it comes" ? `Use ${focal} lens perspective.` : "",
@@ -3672,17 +4042,17 @@ if(type==="clip"){
           lensEffect !== "None" ? `Lens effect: ${lensEffect}.` : "",
           shutterEffect !== "Natural Motion Blur" ? `Shutter effect: ${shutterEffect}.` : ""
         ].filter(Boolean).join(" ");
-        const finalPrompt = [cascadePrompt, opticsPrompt, userPrompt].filter(Boolean).join(" ");
+        const finalPrompt = [upstreamPrompt, cascadePrompt, opticsPrompt, userPrompt].filter(Boolean).join(" ");
         const validation_warnings = validationWarningsForPrompt(refAnalysis, finalPrompt);
         payloadWarnings.push(...validation_warnings.map(w => `${g.id}: ${w}`));
-        blocks.push({ node_id: g.id, type: g.type, batch, resolution: res, aspect_ratio: aspect, focal_length: focal, aperture, lens_effect:lensEffect, shutter_effect:shutterEffect, prompt: finalPrompt, user_prompt:userPrompt, cascade_prompt:cascadePrompt, analysis_ref_id: refAnalysis ? refNode.id : null, validation_warnings });
+        blocks.push({ node_id: g.id, type: g.type, batch, resolution: res, aspect_ratio: aspect, focal_length: focal, aperture, lens_effect:lensEffect, shutter_effect:shutterEffect, prompt: finalPrompt, user_prompt:userPrompt, upstream_prompt:upstreamPrompt, cascade_prompt:cascadePrompt, analysis_ref_id: refAnalysis ? refNode.id : null, validation_warnings });
         promptParts.push("[" + String(g.type).toUpperCase() + " | batch=" + batch + " | " + res + " | " + aspect + " | focal=" + focal + " | aperture=" + aperture + " | lens_effect=" + lensEffect + " | shutter_effect=" + shutterEffect + "] " + finalPrompt);
       }
       const output_last_frame_uri = (c.data && c.data.output_last_frame_uri) || ("gs://your-bucket/renders/" + clipName + "_LAST_FRAME.png");
       const generation_config = isOmniModel
-        ? { method: "omni_any_to_video", engine:"gemini-omni", editing_layer:targetModelProps.editing_layer || "nano-banana-pro", audio_enabled:audio_enabled, seconds:clipSeconds, length_seconds:clipSeconds, resolution:modelResolutionDefault, fps:modelFpsDefault, batch:modelBatchDefault, aspect_ratio:modelAspectDefault, focal_length:modelFocalDefault, aperture:modelApertureDefault, lens_effect:modelLensEffectDefault, shutter_effect:modelShutterEffectDefault, multi_turn_editing:true, explicit_start_end_frames:false }
-        : { method: "ingredients_to_video", provider:"vertex_ai", model:veoVertexModelName(modelId), seed: 3003, motion_pacing: "slow", audio_enabled: audio_enabled, seconds: clipSeconds, resolution:modelResolutionDefault, fps:modelFpsDefault, batch:modelBatchDefault, aspect_ratio:modelAspectDefault, focal_length:modelFocalDefault, aperture:modelApertureDefault, lens_effect:modelLensEffectDefault, shutter_effect:modelShutterEffectDefault };
-      const clipPrompt = [modelOpticsPromptFromConfig(generation_config), promptParts.join(" ").trim()].filter(Boolean).join(" ");
+        ? { method: "omni_any_to_video", engine:"gemini-omni", editing_layer:targetModelProps.editing_layer || "nano-banana-pro", audio_enabled:audio_enabled, seconds:clipSeconds, length_seconds:clipSeconds, resolution:modelResolutionDefault, fps:modelFpsDefault, batch:modelBatchDefault, aspect_ratio:modelAspectDefault, focal_length:modelFocalDefault, aperture:modelApertureDefault, lens_effect:modelLensEffectDefault, shutter_effect:modelShutterEffectDefault, model_prompt:modelPromptText || null, multi_turn_editing:true, explicit_start_end_frames:false }
+        : { method: "ingredients_to_video", provider:"vertex_ai", model:veoVertexModelName(modelId), seed: 3003, motion_pacing: "slow", audio_enabled: audio_enabled, seconds: clipSeconds, resolution:modelResolutionDefault, fps:modelFpsDefault, batch:modelBatchDefault, aspect_ratio:modelAspectDefault, focal_length:modelFocalDefault, aperture:modelApertureDefault, lens_effect:modelLensEffectDefault, shutter_effect:modelShutterEffectDefault, model_prompt:modelPromptText || null };
+      const clipPrompt = [modelPromptText, modelOpticsPromptFromConfig(generation_config), promptParts.join(" ").trim()].filter(Boolean).join(" ");
       const clipPayload = { clip_name: clipName, clip_index: Number((c.data && c.data.clip_index) || 0), generation_config, ingredients: { reference_images: reference_images, first_frame: first_frame, model_inputs: modelInputs }, prompt: clipPrompt, compiled_blocks: blocks, output_last_frame_uri: output_last_frame_uri, autochain_to_next_clip: autochain };
       if(isOmniModel){
         clipPayload.omni_prompt_json = omniPromptJsonForClip(clipPayload, blocks, modelInputs, { modelProps: targetModelProps, caps: targetCaps });
@@ -3740,11 +4110,8 @@ if(type==="clip"){
         lens_effect: modelLensEffectDefault,
         shutter_effect: modelShutterEffectDefault,
         audio_enabled,
-        upstream_parameters: modelInputs.filter(input => input.role === "parameter").map(input => ({
-          node_id: input.source_node_id,
-          key: input.param_key,
-          value: input.param_values || input.param_value
-        }))
+        model_prompt: modelPromptText || null,
+        upstream_parameters: modelCascadeParams
       },
       api_compatibility: isOmniModel ? {
         provider: "google",
@@ -3835,6 +4202,33 @@ if(type==="clip"){
     return `${config.proxy_url}/api/veo/download?token=${encodeURIComponent(config.client_token)}&uri=${encodeURIComponent(uri)}`;
   }
 
+  async function waitForVeoClipResult(clipPayload, clipName, maxPollMs){
+    const submit = await proxyJson("/api/veo/submit", { payload: clipPayload });
+    const opName = submit.operation_name;
+    if(!opName) throw new Error("No operation name returned.");
+    logLine("INFO", `${nowTime()} Operation: ${opName}`);
+
+    const started = Date.now();
+    for(;;){
+      if(Date.now() - started > maxPollMs){
+        throw new Error(`Timed out waiting for ${clipName} after 20 minutes.`);
+      }
+      await new Promise(r => setTimeout(r, 3000));
+      const status = await proxyJson("/api/veo/status", { operation_name: opName });
+      if(!status.done) continue;
+      const uris = Array.isArray(status.video_uris) && status.video_uris.length ? status.video_uris : (status.video_uri ? [status.video_uri] : []);
+      if(!uris.length){ throw new Error(`${clipName} finished, but no video URI was returned.`); }
+      return {
+        operation_name: opName,
+        model_name: submit.model_name,
+        video_uris: uris,
+        usage_metadata: status.usage_metadata || null,
+        operation_metadata: status.operation_metadata || null,
+        completed_at: new Date().toISOString()
+      };
+    }
+  }
+
   async function runVeoGeneration(payload){
     const config = window.__VEO_CONFIG__ || {};
     if(!config.has_api_key){
@@ -3851,32 +4245,133 @@ if(type==="clip"){
       const clipPayload = Object.assign({}, payload, { clips: [clip] });
       logLine("INFO", `${nowTime()} Submitting ${clipName} (${i+1}/${clips.length}) via local proxy...`);
 
-      const submit = await proxyJson("/api/veo/submit", { payload: clipPayload });
-      const opName = submit.operation_name;
-      if(!opName) throw new Error("No operation name returned.");
-      logLine("INFO", `${nowTime()} Operation: ${opName}`);
-
-      const started = Date.now();
-      for(;;){
-        if(Date.now() - started > maxPollMs){
-          throw new Error(`Timed out waiting for ${clipName} after 20 minutes.`);
-        }
-        await new Promise(r => setTimeout(r, 3000));
-        const status = await proxyJson("/api/veo/status", { operation_name: opName });
-        if(!status.done) continue;
-
-        const uri = status.video_uri;
-        if(!uri){ throw new Error(`${clipName} finished, but no video URI was returned.`); }
-        logLine("INFO", `${nowTime()} Video ready for ${clipName}. Starting download.`);
-
+      const result = await waitForVeoClipResult(clipPayload, clipName, maxPollMs);
+      logLine("INFO", `${nowTime()} Video ready for ${clipName}. Starting download.`);
+      for(const uri of result.video_uris){
         const a = document.createElement("a");
         a.href = downloadUrlFor(uri);
         a.download = `${clipName}.mp4`.replace(/[^a-z0-9_.-]+/gi, "_");
         document.body.appendChild(a);
         a.click();
         a.remove();
-        break;
       }
+    }
+  }
+
+  async function runModelNodeGeneration(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || (node.type !== "model" && node.type !== "omni_model")) return;
+    const submittedAt = new Date().toISOString();
+    const runId = `model-run:${node.id}:${submittedAt}`;
+    const setModelRunPatch = (patch) => {
+      setNodes(nds => nds.map(n => n.id === node.id ? Object.assign({}, n, { data:Object.assign({}, n.data, patch) }) : n));
+    };
+    try{
+      const config = window.__VEO_CONFIG__ || {};
+      if(!config.has_api_key) throw new Error("Missing API key. Set GOOGLE_API_KEY in access.env.");
+      const payload = compilePayloadMultiClip({ quiet:false, targetModel: node });
+      if(!payload) throw new Error("Could not compile a payload for this model.");
+      if(payload.model_family !== "veo"){
+        throw new Error("Generate is currently wired to the local Veo API route. Omni payloads are compiled but not submitted yet.");
+      }
+      setModelRunPatch({
+        model_generation_status:"running",
+        model_generation_error:null,
+        model_last_payload_preview:selectedGeneratorApiJson(node, payload),
+        model_estimate:{
+          total_credits: payload.credits_estimate && payload.credits_estimate.total_credits,
+          total_usd: payload.credits_estimate && payload.credits_estimate.total_usd,
+          total_local: payload.credits_estimate && payload.credits_estimate.total_local,
+          currency: payload.credits_estimate && payload.credits_estimate.currency,
+          sections: payload.credits_estimate && payload.credits_estimate.sections,
+          ready: payload.ready
+        }
+      });
+
+      const maxPollMs = 20 * 60 * 1000;
+      const outputs = [];
+      const clipRecords = [];
+      const clips = payload.clips || [];
+      for(let i = 0; i < clips.length; i += 1){
+        const clip = clips[i];
+        const clipName = (clip && clip.clip_name) || `clip_${i+1}`;
+        const clipPayload = Object.assign({}, payload, { clips:[clip] });
+        logLine("INFO", `${nowTime()} Generating ${clipName} from ${node.data && node.data.title || node.id}...`);
+        const result = await waitForVeoClipResult(clipPayload, clipName, maxPollMs);
+        clipRecords.push(Object.assign({ clip_name:clipName }, result));
+        result.video_uris.forEach((uri, index) => {
+          outputs.push({
+            id: `${runId}:clip-${i}:sample-${index}`,
+            run_id: runId,
+            clip_name: clipName,
+            sample_index: index + 1,
+            kind: "video",
+            uri,
+            mime_type: "video/mp4",
+            aspect_ratio: clip && clip.generation_config ? clip.generation_config.aspect_ratio || null : null,
+            operation_name: result.operation_name,
+            model_id: payload.model_id,
+            submitted_at: submittedAt,
+            completed_at: result.completed_at,
+            estimated_credits: payload.credits_estimate && payload.credits_estimate.total_credits,
+            estimated_cost_local: payload.credits_estimate && payload.credits_estimate.total_local,
+            currency: payload.credits_estimate && payload.credits_estimate.currency,
+            actual_cost_local: null,
+            usage_metadata: result.usage_metadata || null
+          });
+        });
+      }
+
+      const runRecord = {
+        id: runId,
+        node_id: node.id,
+        node_type: node.type,
+        model_id: payload.model_id,
+        model_family: payload.model_family,
+        submitted_at: submittedAt,
+        completed_at: new Date().toISOString(),
+        payload_json: payload,
+        api_payload_json: selectedGeneratorApiJson(node, payload),
+        connected_assets: payload.output_model_inputs || [],
+        estimated_cost: payload.credits_estimate || null,
+        actual_cost: null,
+        actual_cost_note: "Provider response did not expose billable cost. usage_metadata is stored when returned so estimates can be calibrated later.",
+        clips: clipRecords,
+        outputs
+      };
+      const storeKey = await saveModelRunRecord(runRecord).catch(err => {
+        logLine("WARN", `${nowTime()} Model run history was not saved: ${String(err && (err.message||err))}`);
+        return null;
+      });
+      setNodes(nds => nds.map(n => {
+        if(n.id !== node.id) return n;
+        const existing = (n.data && n.data.model_outputs) || [];
+        return Object.assign({}, n, {
+          data:Object.assign({}, n.data, {
+            model_generation_status:"idle",
+            model_generation_error:null,
+            model_outputs: existing.concat(outputs),
+            model_output_index: existing.length,
+            model_last_run_id: runId,
+            model_last_run_store_key: storeKey,
+            model_last_completed_at: runRecord.completed_at
+          })
+        });
+      }));
+      setSelectedIds([node.id]);
+      logLine("INFO", `${nowTime()} Model generation complete: ${outputs.length} output(s).`);
+    }catch(err){
+      const message = String(err && (err.message || err));
+      setModelRunPatch({ model_generation_status:"error", model_generation_error:message });
+      logLine("ERROR", `${nowTime()} Model generation failed: ${message}`);
+      await saveModelRunRecord({
+        id: runId,
+        node_id: node.id,
+        node_type: node.type,
+        submitted_at: submittedAt,
+        completed_at: new Date().toISOString(),
+        error: message
+      }).catch(() => null);
     }
   }
 
