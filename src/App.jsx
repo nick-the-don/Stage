@@ -25,12 +25,13 @@ function nowTime(){
 }
 
 const MODEL_CATALOG = {
-  "Veo 3.1 Quality": { id: "veo-3.1-quality", credits_per_sec_hd: 12, max_reference_images: 3, supports_audio: true },
-  "Veo 3.1 Fast": { id: "veo-3.1-fast", credits_per_sec_hd: 5, max_reference_images: 2, supports_audio: false }
+  "Veo 3.1 Quality": { id: "veo-3.1-generate-001", credits_per_sec_hd: 12, max_reference_images: 3, supports_audio: true },
+  "Veo 3.1 Fast": { id: "veo-3.1-fast-generate-001", credits_per_sec_hd: 5, max_reference_images: 2, supports_audio: false },
+  "Gemini Omni Flash": { id: "gemini-omni-flash", credits_per_sec_hd: 8, max_reference_images: 5, supports_audio: true, is_omni: true, max_seconds: 10, explicit_start_end_frames: false }
 };
 
 const RES_PRESETS = ["SD","HD","2K","4K"];
-const RES_MULT = { SD:0.7, HD:1.0, "2K":1.25, "4K":1.6 };
+const RES_MULT = { SD:0.7, HD:1.0, "720P":0.8, "720":0.8, "1080P":1.0, "1080":1.0, "2K":1.25, "4K":1.6 };
 const ESTIMATE_RATES = {
   generator_image_hd: 3,
   nano_banana_hd: 8,
@@ -39,7 +40,7 @@ const ESTIMATE_RATES = {
 };
 const ASPECT_PRESETS = ["1:1","9:16","16:9","21:9"];
 
-const NODE_COLORS = { model:"#E63946", ref:"#F4A261", face:"#E9C46A", body:"#2A9D8F", clothing:"#3A86FF", pose:"#8E44AD", param:"#6C757D", clip:"#6C757D", nano_banana:"#FFD700" };
+const NODE_COLORS = { model:"#E63946", omni_model:"#7DD3FC", ref:"#F4A261", face:"#E9C46A", body:"#2A9D8F", clothing:"#3A86FF", pose:"#8E44AD", lens:"#C4B5FD", param:"#6C757D", clip:"#6C757D", nano_banana:"#FFD700" };
 const REF_GATE_COLORS = { pending:"#E63946", active:"#4ec9b0" };
 const ANALYSIS_SCHEMA_VERSION = "stage.asset_reference.analysis.v1";
 const GRID_DOT_GAP = 18;
@@ -60,22 +61,37 @@ function miniMapNodeStrokeColor(node){
 }
 
 const PALETTE = [
-  { key:"model", title:"Model", subtitle:"Final render + chaining", tags:["Veo 3.1 Fast/Quality"] },
+  { key:"model", title:"VEO", subtitle:"Final render + chaining", tags:["Veo 3.1 Fast/Quality"] },
+  { key:"omni_model", title:"Google Omni", subtitle:"Any-input video model", tags:["10s","5 photo refs","video/audio"] },
   { key:"nano_banana", title:"Nano Banana Pro", subtitle:"Gemini 3 Pro Image", tags:["14-img blend","high fidelity"], thumb:"14x" },
   { key:"ref", title:"Asset Reference", subtitle:"Upload / Analyze", tags:["reference image"], thumb:"IMG" },
   { key:"face", title:"CU / Face", subtitle:"Close-up identity passes", tags:["face cref"] },
   { key:"body", title:"Body CREF", subtitle:"Full-body consistency", tags:["turnaround"] },
   { key:"clothing", title:"Clothing / Accessories", subtitle:"Wardrobe exploration", tags:["materials"] },
   { key:"pose", title:"Pose action", subtitle:"Readable silhouette", tags:["action"] },
-  { key:"param_batch_4", title:"Batch = 4", subtitle:"Param override", tags:["override"] },
-  { key:"param_aspect_16_9", title:"Aspect = 16:9", subtitle:"Param override", tags:["override"] },
-  { key:"param_res_hd", title:"Res = HD", subtitle:"Param override", tags:["override"] },
-  { key:"param_focal_35", title:"Focal = 35mm", subtitle:"Param override", tags:["override"] },
-  { key:"param_ap_f14", title:"Aperture = f/1.4", subtitle:"Param override", tags:["override"] },
+  { key:"param_batch_4", title:"Batch", subtitle:"Output samples", tags:["parameter"] },
+  { key:"param_length_8", title:"Length", subtitle:"Clip duration", tags:["parameter"] },
+  { key:"param_fps_24", title:"FPS", subtitle:"Frame rate", tags:["parameter"] },
+  { key:"param_aspect_16_9", title:"Aspect", subtitle:"Frame shape", tags:["parameter"] },
+  { key:"param_res_hd", title:"Resolution", subtitle:"Output size", tags:["parameter"] },
+  { key:"param_lens", title:"Lens", subtitle:"Optics + shutter", tags:["parameter"] },
   { key:"clip", title:"Background", subtitle:"Scene / environment", tags:["backdrop"] }
 ];
 
 const PARAM_KEYS = PALETTE.map(p=>p.key).filter(k=>k.startsWith("param_"));
+const FOCAL_LENGTH_OPTIONS = ["14mm","18mm","21mm","24mm","28mm","35mm","40mm","50mm","65mm","75mm","85mm","100mm","135mm","200mm"];
+const APERTURE_OPTIONS = ["f/1.2","f/1.4","f/2","f/2.8","f/4","f/5.6","f/8","f/11","f/16"];
+const LENS_EFFECT_OPTIONS = ["None","Split-Diopter","Prism Glass","Edge Smearing","Chromatic Aberration","Prism Refraction","Swirly Bokeh","Cat-Eye Bokeh","Hexagonal Bokeh"];
+const SHUTTER_EFFECT_OPTIONS = ["Natural Motion Blur","Long Exposure / Slow Shutter","1/12s Heavy Motion Blur","High Shutter Speed","1/1000s Freeze Motion","Narrow Shutter Angle","Wide Shutter Angle"];
+const PARAMETER_DEFS = [
+  { key:"batch", title:"Batch", param_key:"batch", default_val:1, options:[1,2,3,4], note:"Veo max output videos per prompt is 4." },
+  { key:"length", title:"Length", param_key:"length_seconds", default_val:8, options:[4,6,8,10], suffix:"s", note:"Veo accepts 4, 6, or 8 seconds; 10s is kept for Omni intent." },
+  { key:"fps", title:"FPS", param_key:"fps", default_val:24, options:[24,30,60], note:"Veo 3.1 submits at 24 FPS; higher values are Omni/style intent." },
+  { key:"aspect", title:"Aspect", param_key:"aspect", default_val:"16:9", options:["16:9","9:16"], note:"Veo 3.1 accepts landscape or portrait." },
+  { key:"resolution", title:"Resolution", param_key:"res", default_val:"1080p", options:["720p","1080p","4K"], note:"Veo 3.1 supports 720p, 1080p, and 4K preview output." },
+  { key:"lens", title:"Lens", param_key:"lens", default_val:"lens", options:[], note:"Prompt-level optical guidance: focal length, aperture, lens effects, and shutter effects." }
+];
+const PARAMETER_DEF_BY_PARAM_KEY = Object.fromEntries(PARAMETER_DEFS.map(def => [def.param_key, def]));
 const LIBRARY_DEPARTMENTS = [
   { title:"Casting", keys:["face","pose","body","ref","nano_banana"] },
   { title:"Hair and Makeup", keys:["face","ref","nano_banana"] },
@@ -83,7 +99,7 @@ const LIBRARY_DEPARTMENTS = [
   { title:"Production Design", keys:["ref","nano_banana"] },
   { title:"Cinematography", keys:PARAM_KEYS },
   { title:"Directing", keys:[] },
-  { title:"Print", keys:["model"] }
+  { title:"Print", keys:["model","omni_model"] }
 ];
 const LIBRARY_UTILS = ["clip"];
 const byKeys = (keys) => keys.map(k => PALETTE.find(p=>p.key===k)).filter(Boolean);
@@ -93,6 +109,7 @@ function paletteTypeForKey(key){
 function paletteColorForKey(key){
   const type = paletteTypeForKey(key);
   if(type === "ref") return REF_GATE_COLORS.pending;
+  if(key === "param_lens") return NODE_COLORS.lens;
   return NODE_COLORS[type] || "#777";
 }
 function paletteItemStyle(key){
@@ -120,9 +137,35 @@ function isTextEditingTarget(event){
   return tag === "input" || tag === "textarea" || tag === "select" || !!el.isContentEditable;
 }
 
+function parameterDefForData(data){
+  if(data && (data.param_key === "focal_length" || data.param_key === "aperture")) return PARAMETER_DEF_BY_PARAM_KEY.lens || PARAMETER_DEFS[0];
+  return PARAMETER_DEF_BY_PARAM_KEY[(data && data.param_key) || "batch"] || PARAMETER_DEFS[0];
+}
+
+function lensParamValues(data){
+  const values = (data && data.param_values) || {};
+  return {
+    focal_length: values.focal_length || data?.focal_length || (data?.param_key === "focal_length" ? data?.param_val : null) || "35mm",
+    aperture: values.aperture || data?.aperture || (data?.param_key === "aperture" ? data?.param_val : null) || "f/2.8",
+    lens_effect: values.lens_effect || data?.lens_effect || "None",
+    shutter_effect: values.shutter_effect || data?.shutter_effect || "Natural Motion Blur"
+  };
+}
+
+function parameterTitleForKey(paramKey){
+  return (PARAMETER_DEF_BY_PARAM_KEY[paramKey] && PARAMETER_DEF_BY_PARAM_KEY[paramKey].title) || "Parameter";
+}
+
+function parameterValueLabel(def, value){
+  return `${value}${def && def.suffix && !String(value).endsWith(def.suffix) ? def.suffix : ""}`;
+}
+
 function defaultPropsFor(type){
   if(type==="model"){
-    return { title:"MODEL (Veo)", subtitle:"Top of pipe (governs capabilities)", tags:["gates features","credits + price"], model_ver:"Veo 3.1 Quality", seconds_per_clip:8, audio_enabled:true, usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
+    return { title:"VEO", subtitle:"Vertex video model", tags:["gates features","credits + price"], model_ver:"Veo 3.1 Quality", seconds_per_clip:8, resolution:"1080p", fps:24, batch:1, aspect:"16:9", focal_length:"As it comes", aperture:"As it comes", lens_effect:"None", shutter_effect:"Natural Motion Blur", audio_enabled:true, usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
+  }
+  if(type==="omni_model"){
+    return { title:"GOOGLE OMNI", subtitle:"Any-input video + edit model", tags:["gemini omni flash","up to 5 photos","video/audio"], model_ver:"Gemini Omni Flash", length_seconds:10, resolution:"4K", fps:24, batch:1, aspect:"16:9", focal_length:"As it comes", aperture:"As it comes", lens_effect:"None", shutter_effect:"Natural Motion Blur", audio_enabled:true, editing_layer:"nano-banana-pro", usd_per_credit:0.01, currency:"USD", usd_to_local:1.0 };
   }
   if(type==="nano_banana"){ 
     return { title:"Nano Banana Pro", subtitle:"14-Input Blender", tags:["gemini 3 pro"], res:"HD", aspect:"16:9", slots: Array(14).fill(null), prompt: "", result_uri: null, result_data_url: null, result_text: "", result_model: "", generation_status:"idle" }; 
@@ -157,6 +200,13 @@ function incomingParams(nodeId, nodes, edges){
   for(const sid of incoming){
     const src = nodes.find(n => n.id === sid);
     if(src && src.type === "param"){
+      if(src.data && src.data.param_key === "lens"){
+        Object.assign(params, lensParamValues(src.data));
+        continue;
+      }
+      if(src.data && src.data.param_values && typeof src.data.param_values === "object"){
+        Object.assign(params, src.data.param_values);
+      }
       const k = src.data && src.data.param_key;
       const v = src.data && src.data.param_val;
       if(k) params[k] = v;
@@ -200,6 +250,106 @@ function effectiveNodeRes(node, nodes, edges){
   return String(effectiveNodeValue(node, nodes, edges, "res", "HD") || "HD").toUpperCase();
 }
 
+function firstDefinedParam(params, keys){
+  for(const key of keys){
+    if(params && params[key] !== undefined) return params[key];
+  }
+  return undefined;
+}
+
+function clampNumber(value, min, max, fallback){
+  const n = Number(value);
+  const safe = Number.isFinite(n) ? n : fallback;
+  return Math.max(min, Math.min(max, safe));
+}
+
+function clampInt(value, min, max, fallback){
+  return Math.round(clampNumber(value, min, max, fallback));
+}
+
+function normalizeVeoResolution(value){
+  const raw = String(value || "1080p").trim().toUpperCase();
+  if(["SD", "720", "720P"].includes(raw)) return "720p";
+  if(["4K", "UHD"].includes(raw)) return "4K";
+  if(["HD", "FHD", "FULLHD", "FULL HD", "1080", "1080P", "2K"].includes(raw)) return "1080p";
+  return "1080p";
+}
+
+function normalizeOmniResolution(value){
+  const raw = String(value || "4K").trim().toUpperCase();
+  if(raw === "720" || raw === "720P" || raw === "1080" || raw === "1080P") return "HD";
+  if(raw === "SD") return "HD";
+  if(RES_PRESETS.includes(raw)) return raw;
+  return "4K";
+}
+
+function normalizeVeoSeconds(value){
+  const allowed = [4, 6, 8];
+  const n = Number(value || 8);
+  return allowed.reduce((best, curr) => {
+    const bestDiff = Math.abs(best - n);
+    const currDiff = Math.abs(curr - n);
+    return currDiff < bestDiff || (currDiff === bestDiff && curr > best) ? curr : best;
+  }, 8);
+}
+
+function normalizeModelAspect(value){
+  return String(value || "16:9") === "9:16" ? "9:16" : "16:9";
+}
+
+function normalizeVeoFps(){
+  return 24;
+}
+
+function normalizeVeoSampleCount(value){
+  return clampInt(value, 1, 4, 1);
+}
+
+function normalizeOmniSeconds(value){
+  return clampInt(value, 1, 10, 10);
+}
+
+function normalizeModelBatch(value, modelType){
+  return modelType === "model" ? clampInt(value, 1, 4, 1) : clampInt(value, 1, 8, 1);
+}
+
+function modelParamDefaultPatch(node, nodes, edges){
+  if(!node || (node.type !== "model" && node.type !== "omni_model")) return null;
+  const params = incomingParams(node.id, nodes, edges);
+  const manual = (node.data && node.data._manual_model_controls) || {};
+  const patch = {};
+  const setFromParam = (targetKey, aliases, normalizer) => {
+    if(manual[targetKey]) return;
+    const raw = firstDefinedParam(params, aliases);
+    if(raw === undefined) return;
+    const next = normalizer(raw);
+    if(next !== undefined && (!node.data || node.data[targetKey] !== next)) patch[targetKey] = next;
+  };
+  if(node.type === "model"){
+    setFromParam("seconds_per_clip", ["length", "length_seconds", "seconds", "seconds_per_clip", "duration", "duration_seconds"], normalizeVeoSeconds);
+    setFromParam("resolution", ["resolution", "res", "image_size"], normalizeVeoResolution);
+    setFromParam("fps", ["fps", "frame_rate", "frameRate"], (value) => clampInt(value, 1, 120, 24));
+    setFromParam("batch", ["batch", "sample_count", "sampleCount"], (value) => normalizeModelBatch(value, "model"));
+    setFromParam("aspect", ["aspect", "aspect_ratio", "aspectRatio"], normalizeModelAspect);
+    setFromParam("focal_length", ["focal_length", "focalLength"], (value) => String(value || "As it comes"));
+    setFromParam("aperture", ["aperture"], (value) => String(value || "As it comes"));
+    setFromParam("lens_effect", ["lens_effect", "lensEffect"], (value) => String(value || "None"));
+    setFromParam("shutter_effect", ["shutter_effect", "shutterEffect"], (value) => String(value || "Natural Motion Blur"));
+  }
+  if(node.type === "omni_model"){
+    setFromParam("length_seconds", ["length", "length_seconds", "seconds", "seconds_per_clip", "duration", "duration_seconds"], normalizeOmniSeconds);
+    setFromParam("resolution", ["resolution", "res", "image_size"], normalizeOmniResolution);
+    setFromParam("fps", ["fps", "frame_rate", "frameRate"], (value) => clampInt(value, 12, 60, 24));
+    setFromParam("batch", ["batch", "sample_count", "sampleCount"], (value) => normalizeModelBatch(value, "omni_model"));
+    setFromParam("aspect", ["aspect", "aspect_ratio", "aspectRatio"], normalizeModelAspect);
+    setFromParam("focal_length", ["focal_length", "focalLength"], (value) => String(value || "As it comes"));
+    setFromParam("aperture", ["aperture"], (value) => String(value || "As it comes"));
+    setFromParam("lens_effect", ["lens_effect", "lensEffect"], (value) => String(value || "None"));
+    setFromParam("shutter_effect", ["shutter_effect", "shutterEffect"], (value) => String(value || "Natural Motion Blur"));
+  }
+  return Object.keys(patch).length ? patch : null;
+}
+
 function isGatewayDisabled(node){
   const data = (node && node.data) || {};
   const warningText = Array.isArray(data.cascade_warnings) ? data.cascade_warnings.join(" ") : "";
@@ -237,9 +387,11 @@ function hasReferenceImage(node){
 }
 
 function estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady){
-  const secondsDefault = Math.max(1, estimateNumber(modelProps.seconds_per_clip, 8));
+  const secondsDefault = Math.max(1, Math.min(caps.max_seconds || 30, estimateNumber(modelProps.length_seconds !== undefined ? modelProps.length_seconds : modelProps.seconds_per_clip, 8)));
   const audioEnabled = !!(modelProps.audio_enabled && caps.supports_audio);
   const audioMult = audioEnabled ? ESTIMATE_RATES.audio_multiplier : 1.0;
+  const modelBatch = normalizeModelBatch(modelProps.batch, caps.is_omni ? "omni_model" : "model");
+  const modelResolution = String(modelProps.resolution || "").toUpperCase();
   const usdPerCredit = Math.max(0, estimateNumber(modelProps.usd_per_credit, 0.01));
   const usdToLocal = Math.max(0, estimateNumber(modelProps.usd_to_local, 1.0));
   const currency = modelProps.currency || "USD";
@@ -273,8 +425,8 @@ function estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady
     const gens = generatorsForClip(clip.id);
     gens.forEach(g => includedGeneratorIds.add(g.id));
     const seconds = Math.max(1, estimateNumber(clip.data && clip.data.seconds, secondsDefault));
-    let resolutionBasis = "HD";
-    let highestResMult = 1.0;
+    let resolutionBasis = modelResolution || "HD";
+    let highestResMult = modelResolution ? resMultiplier(modelResolution) : 1.0;
     gens.forEach(g => {
       const res = effectiveNodeRes(g, nodes, edges);
       const mult = resMultiplier(res);
@@ -283,7 +435,7 @@ function estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady
         resolutionBasis = res;
       }
     });
-    const credits = seconds * caps.credits_per_sec_hd * highestResMult * audioMult;
+    const credits = seconds * caps.credits_per_sec_hd * highestResMult * audioMult * modelBatch;
     sectionsRaw.video += credits;
     breakdown.push({
       category: "video",
@@ -291,10 +443,11 @@ function estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady
       node_id: clip.id,
       model: modelProps.model_ver,
       seconds,
+      batch: modelBatch,
       resolution_basis: resolutionBasis,
       audio_enabled: audioEnabled,
       credits: roundCredits(credits),
-      formula: `${seconds}s x ${caps.credits_per_sec_hd} credits/sec x ${highestResMult} res x ${audioMult} audio`
+      formula: `${seconds}s x ${modelBatch} sample(s) x ${caps.credits_per_sec_hd} credits/sec x ${highestResMult} res x ${audioMult} audio`
     });
   });
 
@@ -364,6 +517,8 @@ function estimateGraphCredits(nodes, edges, modelProps, caps, referenceGateReady
     basis: "planning_estimate",
     ready: referenceGateReady,
     seconds_default: secondsDefault,
+    batch_default: modelBatch,
+    resolution_default: modelProps.resolution || null,
     audio_enabled: audioEnabled,
     rates: {
       veo_credits_per_sec_hd: caps.credits_per_sec_hd,
@@ -545,8 +700,29 @@ function TagRow({ data }){
   `;
 }
 
-function ModelNode({ data }){
+function ModelNode({ data, id }){
+  const { setNodes } = useReactFlow();
   const color = NODE_COLORS["model"] || "#888";
+  const selectedModel = (data && data.model_ver) || "Veo 3.1 Quality";
+  const selectedCaps = MODEL_CATALOG[selectedModel] || MODEL_CATALOG["Veo 3.1 Quality"];
+  const seconds = [4, 6, 8].includes(Number(data && data.seconds_per_clip)) ? Number(data.seconds_per_clip) : 8;
+  const resolution = normalizeVeoResolution(data && data.resolution);
+  const fps = clampInt(data && data.fps, 1, 120, 24);
+  const batch = normalizeModelBatch(data && data.batch, "model");
+  const audioEnabled = !!(data && data.audio_enabled && selectedCaps.supports_audio);
+  const updateData = (patch, manualKeys) => {
+    const keys = manualKeys || Object.keys(patch || {});
+    setNodes(nds => nds.map(n => {
+      if(n.id !== id) return n;
+      const manual = Object.assign({}, (n.data && n.data._manual_model_controls) || {});
+      keys.forEach(key => { manual[key] = true; });
+      return Object.assign({}, n, { data: Object.assign({}, n.data, patch, { _manual_model_controls: manual }) });
+    }));
+  };
+  const onModelChange = (modelVer) => {
+    const nextCaps = MODEL_CATALOG[modelVer] || MODEL_CATALOG["Veo 3.1 Quality"];
+    updateData({ model_ver:modelVer, audio_enabled: nextCaps.supports_audio ? audioEnabled : false });
+  };
   return html`
     <div className="nodeBox nodeModelGrid" style=${{borderColor: color}}>
       <div className="modelInputsRowTop">
@@ -561,18 +737,128 @@ function ModelNode({ data }){
       <${Handle} key="asset1-handle" type="target" position=${Position.Top} id="asset1" style=${{left:"180px"}} />
       <${Handle} key="asset2-handle" type="target" position=${Position.Top} id="asset2" style=${{left:"252px"}} />
       <${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"324px"}} />
+      <${Handle} key="params-handle" type="target" position=${Position.Left} id="params" style=${{top:"108px", background:NODE_COLORS.param}} />
+      <div className="modelParamPortLabel">Params</div>
       <div className="nodeHeaderRow modelNodeHeaderRow">
         <div className="nodeHeaderText">
-          <div className="nodeTitle">${(data && data.title) || "Model (Veo)"}</div>
-          <div className="nodeSub">${(data && data.subtitle) || "Final render + chaining"}</div>
+          <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>VEO</div>
+          <div className="nodeSub">${(data && data.subtitle) || "Vertex video model"}</div>
         </div>
-        <div className="pill" style=${{borderColor: color, color: color}}>VEO</div>
       </div>
-      <${TagRow} data=${data} />
-      <div className="nodeMuted" style=${{marginTop:"8px"}}>
-        ${(data && data.model_ver) ? ("Selected: " + data.model_ver) : ""}
+      <div className="modelControls nodrag">
+        <select value=${selectedModel} onChange=${(e)=>onModelChange(e.target.value)}>
+          <option value="Veo 3.1 Quality">Veo 3.1 Quality</option>
+          <option value="Veo 3.1 Fast">Veo 3.1 Fast</option>
+        </select>
+        <div className="modelControlGrid">
+          <label>
+            <span>Sec</span>
+            <select value=${seconds} onChange=${(e)=>updateData({ seconds_per_clip:Number(e.target.value) })}>
+              <option value=${4}>4</option>
+              <option value=${6}>6</option>
+              <option value=${8}>8</option>
+            </select>
+          </label>
+          <label>
+            <span>Res</span>
+            <select value=${resolution} onChange=${(e)=>updateData({ resolution:e.target.value })}>
+              <option value="720p">720p</option>
+              <option value="1080p">1080p</option>
+              <option value="4K">4K</option>
+            </select>
+          </label>
+          <label>
+            <span>FPS</span>
+            <input type="number" min="1" max="120" step="1" value=${fps} onInput=${(e)=>updateData({ fps: clampInt(e.target.value, 1, 120, 24) })} />
+          </label>
+          <label>
+            <span>Batch</span>
+            <input type="number" min="1" max="4" step="1" value=${batch} onInput=${(e)=>updateData({ batch: normalizeModelBatch(e.target.value, "model") })} />
+          </label>
+          <label className="modelAudioToggle">
+            <span>Audio</span>
+            <input type="checkbox" checked=${audioEnabled} disabled=${!selectedCaps.supports_audio} onChange=${(e)=>updateData({ audio_enabled:e.target.checked })} />
+          </label>
+        </div>
       </div>
       <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{left:"180px"}} />
+    </div>
+  `;
+}
+
+function OmniModelNode({ data, id }){
+  const { setNodes } = useReactFlow();
+  const color = NODE_COLORS["omni_model"] || "#7DD3FC";
+  const updateData = (patch, manualKeys) => {
+    const keys = manualKeys || Object.keys(patch || {});
+    setNodes(nds => nds.map(n => {
+      if(n.id !== id) return n;
+      const manual = Object.assign({}, (n.data && n.data._manual_model_controls) || {});
+      keys.forEach(key => { manual[key] = true; });
+      return Object.assign({}, n, { data: Object.assign({}, n.data, patch, { _manual_model_controls: manual }) });
+    }));
+  };
+  const selectedModel = (data && data.model_ver) || "Gemini Omni Flash";
+  const seconds = Number((data && data.length_seconds) || 10);
+  const resolution = String((data && data.resolution) || "4K");
+  const fps = Number((data && data.fps) || 24);
+  const batch = normalizeModelBatch(data && data.batch, "omni_model");
+  const audioEnabled = !!(data && data.audio_enabled);
+  return html`
+    <div className="nodeBox nodeOmniGrid" style=${{borderColor: color}}>
+      <div className="omniInputsRowTop">
+        <span className="nodeMuted">Photo 1</span>
+        <span className="nodeMuted">Photo 2</span>
+        <span className="nodeMuted">Photo 3</span>
+        <span className="nodeMuted">Photo 4</span>
+        <span className="nodeMuted">Photo 5</span>
+        <span className="nodeMuted">Video</span>
+        <span className="nodeMuted">Audio</span>
+      </div>
+      ${["photo1","photo2","photo3","photo4","photo5","video","audio"].map((handle, index) => html`
+        <${Handle} key=${handle + "-handle"} type="target" position=${Position.Top} id=${handle} style=${{left:(36 + index * 72) + "px"}} />
+      `)}
+      <${Handle} key="params-handle" type="target" position=${Position.Left} id="params" style=${{top:"108px", background:NODE_COLORS.param}} />
+      <div className="modelParamPortLabel">Params</div>
+      <div className="nodeHeaderRow modelNodeHeaderRow">
+        <div className="nodeHeaderText">
+          <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>GOOGLE OMNI</div>
+          <div className="nodeSub">Text, photos, video, audio → video</div>
+        </div>
+      </div>
+      <div className="omniControls nodrag">
+        <select value=${selectedModel} onChange=${(e)=>updateData({ model_ver:e.target.value })}>
+          <option value="Gemini Omni Flash">Gemini Omni Flash</option>
+        </select>
+        <div className="omniControlGrid">
+          <label>
+            <span>Sec</span>
+            <input type="number" min="1" max="10" value=${seconds} onInput=${(e)=>updateData({ length_seconds: Math.max(1, Math.min(10, Number(e.target.value || 10))) })} />
+          </label>
+          <label>
+            <span>Res</span>
+            <select value=${resolution} onChange=${(e)=>updateData({ resolution:e.target.value })}>
+              <option value="HD">HD</option>
+              <option value="2K">2K</option>
+              <option value="4K">4K</option>
+            </select>
+          </label>
+          <label>
+            <span>FPS</span>
+            <input type="number" min="12" max="60" step="1" value=${fps} onInput=${(e)=>updateData({ fps: Math.max(12, Math.min(60, Number(e.target.value || 24))) })} />
+          </label>
+          <label>
+            <span>Batch</span>
+            <input type="number" min="1" max="8" step="1" value=${batch} onInput=${(e)=>updateData({ batch: normalizeModelBatch(e.target.value, "omni_model") })} />
+          </label>
+          <label className="omniAudioToggle">
+            <span>Audio</span>
+            <input type="checkbox" checked=${audioEnabled} onChange=${(e)=>updateData({ audio_enabled:e.target.checked })} />
+          </label>
+        </div>
+      </div>
+      <div className="nodeMuted omniNote">No official hard start/end-frame contract found; use Photo/Video refs for frame guidance.</div>
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{background:color, left:"252px"}} />
     </div>
   `;
 }
@@ -581,27 +867,74 @@ function BaseNode({ data, type, id }){
   const { setNodes } = useReactFlow();
   const disabled = !!(data && data.disabled);
   const refAnalyzed = type === "ref" && isAnalysisActivated(data && data.analysis);
-  const color = type === "ref" ? (refAnalyzed ? REF_GATE_COLORS.active : REF_GATE_COLORS.pending) : (NODE_COLORS[type] || "#888");
   const isRef = (type === "ref" || type === "style_ref");
   const hasMultiInputs = ["face","body","clothing","pose"].includes(type);
   const refUploadInputId = `ref-upload-${id}`;
+  const isParam = type === "param";
+  const paramDef = isParam ? parameterDefForData(data) : null;
+  const isLensParam = isParam && paramDef && paramDef.key === "lens";
+  const lensValues = isLensParam ? lensParamValues(data) : null;
+  const color = type === "ref" ? (refAnalyzed ? REF_GATE_COLORS.active : REF_GATE_COLORS.pending) : (isLensParam ? NODE_COLORS.lens : (NODE_COLORS[type] || "#888"));
   
   // Allow prompt editing directly on the node if it's a generator type
   const showPromptBox = ["face","body","clothing","pose"].includes(type);
   const onPromptChange = (e) => {
      setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, prompt: e.target.value } } : n));
   };
+  const onParamKindChange = (e) => {
+    const nextDef = PARAMETER_DEFS.find(def => def.param_key === e.target.value) || PARAMETER_DEFS[0];
+    setNodes(nds => nds.map(n => n.id === id ? {
+      ...n,
+      data: {
+        ...n.data,
+        title: nextDef.title,
+        subtitle: nextDef.note,
+        param_key: nextDef.param_key,
+        param_val: nextDef.default_val
+      }
+    } : n));
+  };
+  const onParamValueChange = (e) => {
+    const raw = e.target.value;
+    const nextValue = typeof paramDef.default_val === "number" ? Number(raw) : raw;
+    setNodes(nds => nds.map(n => n.id === id ? {
+      ...n,
+      data: {
+        ...n.data,
+        title: paramDef.title,
+        subtitle: paramDef.note,
+        param_val: nextValue
+      }
+    } : n));
+  };
+  const onLensParamChange = (key, value) => {
+    const current = lensParamValues(data);
+    const nextValues = Object.assign({}, current, { [key]: value });
+    setNodes(nds => nds.map(n => n.id === id ? {
+      ...n,
+      data: {
+        ...n.data,
+        title: "Lens",
+        subtitle: "Optics, depth of field, and shutter intent.",
+        param_key: "lens",
+        param_values: nextValues,
+        focal_length: nextValues.focal_length,
+        aperture: nextValues.aperture,
+        lens_effect: nextValues.lens_effect,
+        shutter_effect: nextValues.shutter_effect
+      }
+    } : n));
+  };
 
   return html`
-    <div className=${"nodeBox nodeGridBase nodeType-" + String(type || "node") + " " + (disabled ? "nodeDisabled " : "") + (type === "ref" ? (refAnalyzed ? "referenceGateOn" : "referenceGateOff") : "")} style=${{borderColor: color}}>
-      <div className="topInputsRow">${hasMultiInputs ? html`<span key="asset" className="nodeMuted">Asset</span><span key="style" className="nodeMuted">Style</span>` : html`<span key="input" className="nodeMuted">Input</span>`}</div>
+    <div className=${"nodeBox nodeGridBase nodeType-" + String(type || "node") + " " + (isLensParam ? "nodeParamLens " : "") + (disabled ? "nodeDisabled " : "") + (type === "ref" ? (refAnalyzed ? "referenceGateOn" : "referenceGateOff") : "")} style=${{borderColor: color}}>
+      ${isParam ? null : html`<div className="topInputsRow">${hasMultiInputs ? html`<span key="asset" className="nodeMuted">Asset</span><span key="style" className="nodeMuted">Style</span>` : html`<span key="input" className="nodeMuted">Input</span>`}</div>`}
       <div className="nodeHeaderRow">
         <div className="nodeHeaderText">
-          <div className="nodeTitle">${(data && data.title) || "Node"}</div>
-          ${type === "ref" ? null : html`<div className="nodeSub">${(data && data.subtitle) || ""}</div>`}
+          <div className="nodeTitle nodeTitleBubble" style=${{borderColor: color, color}}>${isParam ? paramDef.title : ((data && data.title) || "Node")}</div>
+          ${type === "ref" || isLensParam ? null : html`<div className="nodeSub">${isParam ? "Cinematography parameter" : ((data && data.subtitle) || "")}</div>`}
           ${(data && data.badge) ? html`<div className="nodeMuted" style=${{marginTop:"4px"}}>${data.badge}</div>` : null}
         </div>
-        ${type === "ref" ? null : html`<div className="pill" style=${{borderColor: color, color: color}}>${String(type || "").toUpperCase()}</div>`}
       </div>
       ${type === "ref" ? html`
         <div className="referenceUploadNodeWrap nodrag">
@@ -626,7 +959,50 @@ function BaseNode({ data, type, id }){
         </div>
       ` : null}
       ${isRef && type !== "ref" && data && (data.image_preview_url || data.image_data_url) ? html`<div style=${{marginTop:"8px", display:"flex", gap:"8px", alignItems:"center"}}><img src=${data.image_preview_url || data.image_data_url} style=${{width:"42px", height:"42px", objectFit:"cover", borderRadius:"10px", border:"1px solid rgba(255,255,255,.12)"}} /><div className="nodeMuted" style=${{lineHeight:"1.2"}}>${(data.image_name || "reference.png")}<br/><span style=${{opacity:.9}}>preview</span></div></div>` : null}
-      <${TagRow} data=${data} />
+      ${isLensParam ? html`
+        <div className="paramControlPanel lensControlPanel nodrag">
+          <label>
+            <span>Focal Length</span>
+            <select value=${lensValues.focal_length} onChange=${(e)=>onLensParamChange("focal_length", e.target.value)}>
+              ${FOCAL_LENGTH_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
+            </select>
+          </label>
+          <label>
+            <span>Aperture</span>
+            <select value=${lensValues.aperture} onChange=${(e)=>onLensParamChange("aperture", e.target.value)}>
+              ${APERTURE_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
+            </select>
+          </label>
+          <label>
+            <span>Lens Effects</span>
+            <select value=${lensValues.lens_effect} onChange=${(e)=>onLensParamChange("lens_effect", e.target.value)}>
+              ${LENS_EFFECT_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
+            </select>
+          </label>
+          <label>
+            <span>Shutter Effects</span>
+            <select value=${lensValues.shutter_effect} onChange=${(e)=>onLensParamChange("shutter_effect", e.target.value)}>
+              ${SHUTTER_EFFECT_OPTIONS.map(option => html`<option key=${option} value=${option}>${option}</option>`)}
+            </select>
+          </label>
+        </div>
+      ` : isParam ? html`
+        <div className="paramControlPanel nodrag">
+          <label>
+            <span>Parameter</span>
+            <select value=${paramDef.param_key} onChange=${onParamKindChange}>
+              ${PARAMETER_DEFS.map(def => html`<option key=${def.param_key} value=${def.param_key}>${def.title}</option>`)}
+            </select>
+          </label>
+          <label>
+            <span>Value</span>
+            <select value=${data && data.param_val !== undefined ? data.param_val : paramDef.default_val} onChange=${onParamValueChange}>
+              ${paramDef.options.map(option => html`<option key=${String(option)} value=${option}>${parameterValueLabel(paramDef, option)}</option>`)}
+            </select>
+          </label>
+          <div className="paramControlNote">${paramDef.note}</div>
+        </div>
+      ` : html`<${TagRow} data=${data} />`}
 
       ${showPromptBox ? html`
          <div style=${{marginTop:"8px"}}>
@@ -634,7 +1010,7 @@ function BaseNode({ data, type, id }){
          </div>
       ` : null}
 
-      ${hasMultiInputs ? html`<${Handle} key="asset-handle" type="target" position=${Position.Top} id="asset" style=${{left:"72px"}} /><${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"144px"}} />` : html`<${Handle} key="in-handle" type="target" position=${Position.Top} id="in" style=${{left:"108px"}} />`}
+      ${isLensParam ? html`<${Handle} key="lens-in-handle" type="target" position=${Position.Top} id="in" style=${{left:"144px", top:"3px"}} />` : isParam ? null : hasMultiInputs ? html`<${Handle} key="asset-handle" type="target" position=${Position.Top} id="asset" style=${{left:"72px"}} /><${Handle} key="style-handle" type="target" position=${Position.Top} id="style" style=${{left:"144px"}} />` : html`<${Handle} key="in-handle" type="target" position=${Position.Top} id="in" style=${{left:"108px"}} />`}
       ${type === "ref" ? html`
         <div className="referenceAnalyzeNodeWrap nodrag">
           <button
@@ -644,7 +1020,7 @@ function BaseNode({ data, type, id }){
           >${refAnalyzed ? "RE-ANALYZE" : "ANALYZE"}</button>
         </div>
       ` : null}
-      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${{left:"108px"}} />
+      <${Handle} key="out-handle" type="source" position=${Position.Bottom} id="out" style=${isLensParam ? {left:"144px", bottom:"3px"} : {left:"108px"}} />
     </div>
   `;
 }
@@ -710,8 +1086,7 @@ function NanoBananaNode({ data, id }){
       
       <div className="nanoHeader" style=${{background:"rgba(255, 215, 0, 0.1)", borderBottom:"1px solid #444"}}>
         <div style=${{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-          <div className="nodeTitle" style=${{color:"#FFD700", margin:"0"}}>NANO BANANA PRO</div>
-          <div className="pill" style=${{color:"#000", background:"#FFD700", fontWeight:"800"}}>GEMINI 3</div>
+          <div className="nodeTitle nodeTitleBubble" style=${{borderColor:"#FFD700", color:"#FFD700", margin:"0"}}>NANO BANANA PRO</div>
         </div>
         <div className="nodeSub" style=${{marginTop:"4px"}}>14-Image Context Window</div>
       </div>
@@ -858,6 +1233,7 @@ function ClipNode({ id, data }){
 }
 const nodeTypes = {
   model: ModelNode,
+  omni_model: OmniModelNode,
   nano_banana: NanoBananaNode,
   ref: (p)=>BaseNode({ ...p, type:"ref" }),
   style_ref: (p)=>BaseNode({ ...p, type:"style_ref" }),
@@ -911,6 +1287,8 @@ const defaultEdgeOptions = { type: "smoothstep" };
 const proOptions = { hideAttribution: true };
 const referenceNodeTypes = new Set(["ref", "face", "body", "clothing", "pose"]);
 const modelReferenceHandles = new Set(["asset1", "asset2", "style"]);
+const omniPhotoHandles = new Set(["photo1", "photo2", "photo3", "photo4", "photo5"]);
+const omniInputHandles = ["photo1", "photo2", "photo3", "photo4", "photo5", "video", "audio"];
 
 function inputCapacityForNode(node, caps){
   if(!node) return null;
@@ -928,6 +1306,26 @@ function inputCapacityForNode(node, caps){
           handles: modelReferenceHandles,
           max: caps.max_reference_images,
           message: "This will create too many inputs for the current model."
+        }
+      }
+    };
+  }
+  if(node.type === "omni_model"){
+    return {
+      handles: {
+        photo1: { max: 1, group: "photos" },
+        photo2: { max: 1, group: "photos" },
+        photo3: { max: 1, group: "photos" },
+        photo4: { max: 1, group: "photos" },
+        photo5: { max: 1, group: "photos" },
+        video: { max: 1 },
+        audio: { max: 1 }
+      },
+      groups: {
+        photos: {
+          handles: omniPhotoHandles,
+          max: caps.max_reference_images || 5,
+          message: "Gemini Omni Flash currently supports up to 5 photo reference input(s)."
         }
       }
     };
@@ -972,12 +1370,13 @@ function connectionCapacityIssue(conn, nodes, edges, caps){
 }
 
 function currentModelCapacityIssue(nodes, edges, caps){
-  const model = nodes.find(n => n.type === "model");
+  const model = nodes.find(n => n.type === "omni_model") || nodes.find(n => n.type === "model");
   if(!model) return null;
   const capacity = inputCapacityForNode(model, caps);
   if(!capacity) return null;
 
-  const referenceRule = capacity.groups.references;
+  const referenceRule = capacity.groups.references || capacity.groups.photos;
+  if(!referenceRule) return null;
   const referenceCount = edges.filter(e => (
     e.target === model.id && referenceRule.handles.has(String(e.targetHandle || ""))
   )).length;
@@ -1187,6 +1586,19 @@ function App(){
     });
   }, [setNodes]);
 
+  React.useEffect(() => {
+    setNodes(nds => {
+      let changed = false;
+      const next = nds.map(node => {
+        const patch = modelParamDefaultPatch(node, nds, edges);
+        if(!patch) return node;
+        changed = true;
+        return Object.assign({}, node, { data: Object.assign({}, node.data, patch) });
+      });
+      return changed ? next : nds;
+    });
+  }, [nodes, edges, setNodes]);
+
   const historyLockRef = React.useRef(false);
   const lastSnapStrRef = React.useRef("");
 
@@ -1297,7 +1709,11 @@ function nodeApproxSize(node){
   let height = Number(style.height || node?.height || measured.height || 144);
   if(node && node.type === "model"){
     width = Number(style.width || node.width || measured.width || 360);
-    height = Number(style.height || node.height || measured.height || 144);
+    height = Number(style.height || node.height || measured.height || 180);
+  }
+  if(node && node.type === "omni_model"){
+    width = Number(style.width || node.width || measured.width || 504);
+    height = Number(style.height || node.height || measured.height || 180);
   }
   if(node && isGeneratorType(node.type)){
     width = Number(style.width || node.width || measured.width || 216);
@@ -1306,6 +1722,10 @@ function nodeApproxSize(node){
   if(node && node.type === "ref"){
     width = Number(style.width || node.width || measured.width || 216);
     height = Number(style.height || node.height || measured.height || 216);
+  }
+  if(node && node.type === "param"){
+    width = Number(style.width || node.width || measured.width || ((node.data && node.data.param_key) === "lens" ? 288 : 216));
+    height = Number(style.height || node.height || measured.height || ((node.data && node.data.param_key) === "lens" ? 288 : 180));
   }
   if(node && node.type === "nano_banana"){
     width = Number(style.width || node.width || measured.width || 396);
@@ -1389,8 +1809,14 @@ function handleRatioForNode(node, handleId, kind){
   const id = String(handleId || "");
   if(kind === "source") return { x:.5, y:1 };
   if(node && node.type === "model"){
+    if(id === "params") return { x:0, y:.6 };
     const ratios = { start:.1, end:.3, asset1:.5, asset2:.7, style:.9 };
     return { x: ratios[id] || .5, y:0 };
+  }
+  if(node && node.type === "omni_model"){
+    if(id === "params") return { x:0, y:.6 };
+    const index = omniInputHandles.indexOf(id);
+    if(index >= 0) return { x:(36 + index * 72) / 504, y:0 };
   }
   if(node && node.type === "nano_banana"){
     const match = id.match(/^in_(\d+)$/);
@@ -1401,6 +1827,9 @@ function handleRatioForNode(node, handleId, kind){
   }
   if(id === "asset") return { x:1/3, y:0 };
   if(id === "style") return { x:2/3, y:0 };
+  if(node && node.type === "param" && node.data && node.data.param_key === "lens"){
+    return { x:.5, y: kind === "target" ? 0.01 : 0.99 };
+  }
   return { x:.5, y: kind === "target" ? 0 : 1 };
 }
 
@@ -1458,6 +1887,9 @@ function edgePatchInputHandle(node, edges){
   }
   if(node.type === "model"){
     return ["start", "asset1", "asset2", "style", "end"].find(h => !occupied(h)) || null;
+  }
+  if(node.type === "omni_model"){
+    return omniInputHandles.find(h => !occupied(h)) || null;
   }
   if(isGeneratorType(node.type)){
     return ["asset", "style"].find(h => !occupied(h)) || null;
@@ -1870,10 +2302,10 @@ function findWirePatchCandidate(node){
     }
   }, [nodes, edges, selectedIds, clipboard]);
 
-  const selectedNodes = React.useMemo(() => nodes.filter(n => selectedIds.includes(n.id)), [nodes, selectedIds]);
+  const selectedNodes = React.useMemo(() => selectedIds.map(id => nodes.find(n => n.id === id)).filter(Boolean), [nodes, selectedIds]);
   const selectedPrimary = React.useMemo(() => selectedNodes[0] || null, [selectedNodes]);
 
-  const modelNode = React.useMemo(() => nodes.find(n => n.type==="model") || null, [nodes]);
+  const modelNode = React.useMemo(() => nodes.find(n => n.type==="omni_model") || nodes.find(n => n.type==="model") || null, [nodes]);
   const modelProps = (modelNode && modelNode.data) || defaultPropsFor("model");
   const caps = MODEL_CATALOG[modelProps.model_ver] || MODEL_CATALOG["Veo 3.1 Quality"];
   const primaryRefNode = React.useMemo(() => nodes.find(n => n.type === "ref") || null, [nodes]);
@@ -2064,15 +2496,23 @@ function findWirePatchCandidate(node){
     setSelectedIds(ids);
   }, []);
 
+  const onNodeClick = React.useCallback((_event, node) => {
+    if(!node || !node.id) return;
+    setSelectedIds([node.id]);
+    setSelectedEdgeIds([]);
+    setEdgeMenu(null);
+  }, []);
+
   function libraryNodeSpec(key){
     let type = key;
     let dataPatch = {};
     if(key && key.indexOf("param_") === 0) type = "param";
-    if(key==="param_batch_4") dataPatch = { title:"Batch=4", subtitle:"Param override", param_key:"batch", param_val:4 };
-    if(key==="param_aspect_16_9") dataPatch = { title:"Aspect=16:9", subtitle:"Param override", param_key:"aspect", param_val:"16:9" };
-    if(key==="param_res_hd") dataPatch = { title:"Res=HD", subtitle:"Param override", param_key:"res", param_val:"HD" };
-    if(key==="param_focal_35") dataPatch = { title:"Focal=35mm", subtitle:"Param override", param_key:"focal_length", param_val:"35mm" };
-    if(key==="param_ap_f14") dataPatch = { title:"Aperture=f/1.4", subtitle:"Param override", param_key:"aperture", param_val:"f/1.4" };
+    if(key==="param_batch_4") dataPatch = { title:"Batch", subtitle:"Veo max output videos per prompt is 4.", param_key:"batch", param_val:1 };
+    if(key==="param_length_8") dataPatch = { title:"Length", subtitle:"Veo accepts 4, 6, or 8 seconds; 10s is kept for Omni intent.", param_key:"length_seconds", param_val:8 };
+    if(key==="param_fps_24") dataPatch = { title:"FPS", subtitle:"Veo 3.1 submits at 24 FPS; higher values are Omni/style intent.", param_key:"fps", param_val:24 };
+    if(key==="param_aspect_16_9") dataPatch = { title:"Aspect", subtitle:"Veo 3.1 accepts landscape or portrait.", param_key:"aspect", param_val:"16:9" };
+    if(key==="param_res_hd") dataPatch = { title:"Resolution", subtitle:"Veo 3.1 supports 720p, 1080p, and 4K preview output.", param_key:"res", param_val:"1080p" };
+    if(key==="param_lens") dataPatch = { title:"Lens", subtitle:"Optics, depth of field, and shutter intent.", param_key:"lens", param_values:lensParamValues({}), focal_length:"35mm", aperture:"f/2.8", lens_effect:"None", shutter_effect:"Natural Motion Blur" };
     return { type, dataPatch };
   }
 
@@ -2460,6 +2900,52 @@ if(type==="clip"){
 
   const selectedAnalysis = selectedPrimary && selectedPrimary.type === "ref" ? (selectedPrimary.data && selectedPrimary.data.analysis) : null;
   const showingAnalysisJson = !!(selectedPrimary && selectedPrimary.type === "ref" && selectedAnalysis);
+  const selectedNodeJson = React.useMemo(() => {
+    if(!selectedPrimary || showingAnalysisJson) return null;
+    if(selectedPrimary.type === "model" || selectedPrimary.type === "omni_model"){
+      const payload = compilePayloadMultiClip({ quiet: true, targetModel: selectedPrimary });
+      if(!payload){
+        return {
+          feed_type: "generator_api_payload",
+          status: "compile_failed",
+          ready: false,
+          generator: {
+            node_id: selectedPrimary.id,
+            node_type: selectedPrimary.type,
+            title: (selectedPrimary.data && selectedPrimary.data.title) || selectedPrimary.type,
+            model: selectedPrimary.data && selectedPrimary.data.model_ver
+          },
+          reason: "The graph could not be normalized into a generator payload."
+        };
+      }
+      return selectedGeneratorApiJson(selectedPrimary, payload);
+    }
+    if(selectedPrimary.type === "nano_banana"){
+      return selectedNanoBananaApiJson(selectedPrimary);
+    }
+    const incoming = edges.filter(edge => edge.target === selectedPrimary.id);
+    const outgoing = edges.filter(edge => edge.source === selectedPrimary.id);
+    return {
+      node_id: selectedPrimary.id,
+      type: selectedPrimary.type,
+      position: selectedPrimary.position || null,
+      data: selectedPrimary.data || {},
+      connections: {
+        inputs: incoming.map(edge => ({
+          edge_id: edge.id,
+          source: edge.source,
+          source_handle: edge.sourceHandle || null,
+          target_handle: edge.targetHandle || null
+        })),
+        outputs: outgoing.map(edge => ({
+          edge_id: edge.id,
+          target: edge.target,
+          source_handle: edge.sourceHandle || null,
+          target_handle: edge.targetHandle || null
+        }))
+      }
+    };
+  }, [selectedPrimary, nodes, edges, showingAnalysisJson, modelProps, caps, creditsAndCost, referenceGateReady]);
   const analysisDraftKey = showingAnalysisJson ? `${selectedPrimary.id}:${selectedAnalysis.analyzed_at || selectedPrimary.data.analysis_status || "analysis"}` : "";
   const [analysisJsonDraft, setAnalysisJsonDraft] = React.useState("");
   const [analysisJsonError, setAnalysisJsonError] = React.useState("");
@@ -2490,14 +2976,635 @@ if(type==="clip"){
     }
   }
 
+  function connectedInputsForModelNode(targetModel){
+    if(!targetModel) return [];
+    const order = targetModel.type === "omni_model"
+      ? ["params"].concat(omniInputHandles)
+      : ["params", "start", "end", "asset1", "asset2", "style"];
+    return edges
+      .filter(edge => edge.target === targetModel.id)
+      .slice()
+      .sort((a, b) => order.indexOf(String(a.targetHandle || "")) - order.indexOf(String(b.targetHandle || "")))
+      .map(edge => {
+        const source = nodes.find(n => n.id === edge.source);
+        const sourceData = (source && source.data) || {};
+        const handle = String(edge.targetHandle || "");
+        const role = targetModel.type === "omni_model"
+          ? (handle === "params" ? "parameter" : (omniPhotoHandles.has(handle) ? "photo_reference" : handle))
+          : (handle === "params" ? "parameter" : handle);
+        const descriptionRole = targetModel.type === "omni_model"
+          ? (role === "photo_reference" ? "asset" : "style")
+          : (role === "style" ? "style" : "asset");
+        return {
+          handle,
+          role,
+          source_node_id: edge.source,
+          source_type: source ? source.type : "unknown",
+          gcs_uri: sourceData.gcs_uri || sourceData.output_last_frame_uri || sourceData.result_uri || null,
+          mime_type: sourceData.mime_type || (role === "video" ? "video/mp4" : (role === "audio" ? "audio/mpeg" : "image/jpeg")),
+          param_key: source && source.type === "param" ? sourceData.param_key || null : null,
+          param_value: source && source.type === "param" ? sourceData.param_val : undefined,
+          param_values: source && source.type === "param" ? (sourceData.param_key === "lens" ? lensParamValues(sourceData) : sourceData.param_values || null) : null,
+          title: sourceData.title || sourceData.clip_name || (source ? source.type : edge.source),
+          description: source && source.type === "param"
+            ? (sourceData.param_key === "lens"
+              ? `lens=${lensParamValues(sourceData).focal_length}, ${lensParamValues(sourceData).aperture}, ${lensParamValues(sourceData).lens_effect}, ${lensParamValues(sourceData).shutter_effect}`
+              : `${sourceData.param_key || "param"}=${sourceData.param_val}`)
+            : source && source.type === "ref" && isAnalysisActivated(sourceData.analysis)
+            ? referenceDescriptionFor(sourceData.analysis, descriptionRole)
+            : (sourceData.cascade_prompt || sourceData.prompt || sourceData.subtitle || "")
+        };
+      });
+  }
+
+  function mediaReferenceForInput(input){
+    if(!input || !input.gcs_uri) return null;
+    return {
+      source_node_id: input.source_node_id,
+      source_type: input.source_type,
+      handle: input.handle,
+      role: input.role,
+      gcs_uri: input.gcs_uri,
+      mime_type: input.mime_type || "image/jpeg",
+      description: input.description || input.title || ""
+    };
+  }
+
+  function uniqueMediaReferences(refs){
+    const seen = new Set();
+    const out = [];
+    for(const ref of refs || []){
+      if(!ref) continue;
+      const key = `${ref.gcs_uri || ref.source_node_id}:${ref.role || ref.reference_type || ""}:${ref.handle || ""}`;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      out.push(ref);
+    }
+    return out;
+  }
+
+  function usablePayloadForModelInput(input){
+    const source = nodes.find(n => n.id === input.source_node_id);
+    const data = (source && source.data) || {};
+    if(input.role === "parameter" || (source && source.type === "param")){
+      return {
+        kind: "parameter",
+        title: input.title || parameterTitleForKey(input.param_key),
+        values: input.param_values || (input.param_key ? { [input.param_key]: input.param_value } : {}),
+        prompt_fragment: input.description || null
+      };
+    }
+    if(source && source.type === "ref"){
+      const analysis = isAnalysisActivated(data.analysis) ? data.analysis : null;
+      return {
+        kind: "asset_reference",
+        status: analysis ? "analyzed" : "pending_analysis",
+        media: mediaReferenceForInput(input),
+        description: input.description || null,
+        identity_profile: analysis ? (analysis.identity_profile || null) : null,
+        cascade_prompt_prefix: analysis && analysis.cascade ? analysis.cascade.prompt_prefix || null : null,
+        validation_rules: analysis ? analysis.validation_rules || null : null
+      };
+    }
+    if(source && source.type === "nano_banana"){
+      return {
+        kind: "generated_image_reference",
+        media: mediaReferenceForInput(input),
+        prompt: data.prompt || null,
+        result_text: data.result_text || null,
+        generated_at: data.last_generated_at || null
+      };
+    }
+    return {
+      kind: source ? source.type : "unknown",
+      media: mediaReferenceForInput(input),
+      title: input.title || (source ? source.type : input.source_node_id),
+      prompt: data.prompt || data.cascade_prompt || input.description || null,
+      output_uri: data.output_last_frame_uri || data.result_uri || null
+    };
+  }
+
+  function cascadeInputsForGeneratorPayload(payload){
+    const inputs = payload.output_model_inputs || [];
+    const clips = payload.clips || [];
+    const clipReferenceImages = uniqueMediaReferences(clips.flatMap(clip => ((clip.ingredients && clip.ingredients.reference_images) || []).map(ref => ({
+      source_node_id: payload.gateway && payload.gateway.asset_reference_node_id,
+      source_type: "asset_reference",
+      role: ref.reference_type || "asset",
+      reference_type: ref.reference_type || "asset",
+      gcs_uri: ref.gcs_uri,
+      mime_type: ref.mime_type || "image/jpeg",
+      description: ref.description || ""
+    }))));
+    const directMedia = uniqueMediaReferences(inputs.map(mediaReferenceForInput).filter(Boolean));
+    return {
+      effective_settings: payload.effective_model_settings || {},
+      gateway: payload.gateway || null,
+      direct_model_inputs: inputs.map(input => ({
+        handle: input.handle,
+        role: input.role,
+        source_node_id: input.source_node_id,
+        source_type: input.source_type,
+        usable_payload: usablePayloadForModelInput(input)
+      })),
+      media: {
+        direct_inputs: directMedia,
+        reference_images: clipReferenceImages,
+        first_frame: clips[0] && clips[0].ingredients ? clips[0].ingredients.first_frame || null : null
+      },
+      prompt_blocks: clips.map(clip => ({
+        clip_name: clip.clip_name,
+        prompt: clip.prompt || "",
+        blocks: (clip.compiled_blocks || []).map(block => ({
+          source_node_id: block.node_id,
+          type: block.type,
+          prompt: block.prompt,
+          settings: {
+            batch: block.batch,
+            resolution: block.resolution,
+            aspect_ratio: block.aspect_ratio,
+            focal_length: block.focal_length,
+            aperture: block.aperture,
+            lens_effect: block.lens_effect,
+            shutter_effect: block.shutter_effect
+          },
+          validation_warnings: block.validation_warnings || []
+        }))
+      }))
+    };
+  }
+
+  function compactCreditsEstimate(credits){
+    if(!credits) return null;
+    return {
+      basis: credits.basis,
+      model: credits.model,
+      ready: credits.ready,
+      sections: credits.sections || {},
+      total_credits: credits.total_credits,
+      currency: credits.currency,
+      total_local: credits.total_local,
+      warnings: credits.warnings || []
+    };
+  }
+
+  function selectedGeneratorApiJson(modelNode, payload){
+    const isOmni = payload.model_family === "gemini_omni";
+    const generator = {
+      node_id: modelNode.id,
+      node_type: modelNode.type,
+      title: (modelNode.data && modelNode.data.title) || (isOmni ? "GOOGLE OMNI" : "VEO"),
+      provider: isOmni ? "google_gemini" : "vertex_ai",
+      model_family: payload.model_family,
+      model_label: modelNode.data && modelNode.data.model_ver,
+      model_id: payload.model_id,
+      ready: payload.ready
+    };
+    const common = {
+      feed_type: "generator_api_payload",
+      ready: payload.ready,
+      generator,
+      cascade_inputs: cascadeInputsForGeneratorPayload(payload),
+      warnings: payload.warnings || [],
+      credits_estimate: compactCreditsEstimate(payload.credits_estimate)
+    };
+    if(isOmni){
+      return Object.assign(common, {
+        model_contract: {
+          accepts_text: true,
+          accepts_photo_references: true,
+          accepts_video: true,
+          accepts_audio: true,
+          multi_turn_editing: true,
+          explicit_start_end_frames: false,
+          max_photo_references: payload.model_capabilities && payload.model_capabilities.max_photo_references,
+          max_seconds: payload.model_capabilities && payload.model_capabilities.max_seconds,
+          note: "Omni is treated as an any-input prompt contract; hard Veo start/end-frame fields are not promoted into its API request."
+        },
+        api_payload: {
+          api_family: "gemini_omni",
+          submit_status: "awaiting_public_submit_route",
+          request_shape: "any_input_video_prompt_json",
+          requests: (payload.clips || []).map(clip => ({
+            clip_name: clip.clip_name,
+            request_body: clip.omni_prompt_json || null
+          }))
+        }
+      });
+    }
+    return Object.assign(common, {
+      model_contract: {
+        accepts_text: true,
+        accepts_start_frame: true,
+        accepts_end_frame_with_start_frame: true,
+        accepts_reference_images: true,
+        reference_style_supported: false,
+        supported_durations_seconds: [4, 6, 8],
+        reference_image_duration_seconds: 8,
+        supported_fps: [24],
+        max_reference_images: payload.model_capabilities && payload.model_capabilities.max_reference_images,
+        submit_route: payload.api_compatibility && payload.api_compatibility.submit_route
+      },
+      api_payload: {
+        api_family: "vertex_ai_veo",
+        submit_route: payload.api_compatibility && payload.api_compatibility.submit_route,
+        request_shape: "instances[] + parameters",
+        requests: (payload.clips || []).map(clip => {
+          const vertex = clip.vertex_request_preview || {};
+          return {
+            clip_name: clip.clip_name,
+            model: vertex.model || payload.model_id,
+            request_body: {
+              instances: vertex.instances || [],
+              parameters: vertex.parameters || {}
+            },
+            structured_prompt_json: clip.veo_prompt_json || null
+          };
+        })
+      }
+    });
+  }
+
+  function nanoBananaInputPreview(nanoNode){
+    const slots = (nanoNode.data && nanoNode.data.slots) || Array(14).fill(null);
+    const images = [];
+    for(let i = 0; i < 14; i += 1){
+      const handleId = `in_${i}`;
+      const edge = edges.find(e => e.target === nanoNode.id && String(e.targetHandle || "") === handleId);
+      const role = i < 6 ? "high_fidelity" : "supplementary";
+      if(edge){
+        const source = nodes.find(n => n.id === edge.source);
+        const data = (source && source.data) || {};
+        const label = `${data.title || (source && source.type) || edge.source} -> slot ${i + 1}`;
+        images.push({
+          slot: i + 1,
+          handle: handleId,
+          role,
+          label,
+          source_node_id: edge.source,
+          source_type: source ? source.type : "unknown",
+          media: {
+            gcs_uri: data.gcs_uri || data.result_uri || data.output_last_frame_uri || null,
+            mime_type: data.mime_type || "image/jpeg",
+            has_inline_image: !!(data.image_data_url || data.result_data_url || data.image_store_key)
+          },
+          usable_payload: source && source.type === "ref" && isAnalysisActivated(data.analysis) ? {
+            kind: "asset_reference",
+            description: referenceDescriptionFor(data.analysis, "asset"),
+            identity_profile: data.analysis.identity_profile || null,
+            cascade_prompt_prefix: data.analysis.cascade ? data.analysis.cascade.prompt_prefix || null : null
+          } : {
+            kind: source ? source.type : "unknown",
+            prompt: data.prompt || data.cascade_prompt || null,
+            result_text: data.result_text || null
+          }
+        });
+      } else if(slots[i]){
+        images.push({
+          slot: i + 1,
+          handle: handleId,
+          role,
+          label: `Manual slot ${i + 1}`,
+          source_node_id: null,
+          source_type: "manual_upload",
+          media: {
+            gcs_uri: null,
+            mime_type: "image/jpeg",
+            has_inline_image: true
+          },
+          usable_payload: {
+            kind: "manual_image_reference"
+          }
+        });
+      }
+    }
+    return images;
+  }
+
+  function selectedNanoBananaApiJson(nanoNode){
+    const images = nanoBananaInputPreview(nanoNode);
+    const prompt = buildNanoBananaPrompt(nanoNode, images);
+    const config = typeof window !== "undefined" ? window.__VEO_CONFIG__ || {} : {};
+    const model = (config.gemini_models && config.gemini_models.image) || "gemini-3-pro-image";
+    const ready = !(nanoNode.data && nanoNode.data.disabled);
+    return {
+      feed_type: "generator_api_payload",
+      ready,
+      generator: {
+        node_id: nanoNode.id,
+        node_type: nanoNode.type,
+        title: (nanoNode.data && nanoNode.data.title) || "Nano Banana Pro",
+        provider: "google_gemini",
+        model_family: "nano_banana",
+        model_label: "Nano Banana Pro",
+        model_id: model,
+        ready
+      },
+      model_contract: {
+        accepts_text: true,
+        accepts_image_inputs: true,
+        max_image_inputs: 14,
+        high_fidelity_slots: "1-6",
+        supplementary_slots: "7-14",
+        output: "still_image"
+      },
+      cascade_inputs: {
+        effective_settings: {
+          resolution: (nanoNode.data && nanoNode.data.res) || "HD",
+          aspect_ratio: (nanoNode.data && nanoNode.data.aspect) || "16:9"
+        },
+        direct_model_inputs: images.map(image => ({
+          handle: image.handle,
+          role: image.role,
+          source_node_id: image.source_node_id,
+          source_type: image.source_type,
+          usable_payload: image.usable_payload
+        })),
+        media: {
+          image_inputs: images.map(image => ({
+            slot: image.slot,
+            role: image.role,
+            label: image.label,
+            media: image.media
+          }))
+        }
+      },
+      api_payload: {
+        api_family: "gemini_image",
+        submit_route: "/api/gemini/image",
+        request_shape: "generateContent text + up to 14 image parts",
+        request_body: {
+          model,
+          prompt,
+          images: images.map(image => ({
+            slot: image.slot,
+            label: image.label,
+            role: image.role,
+            source_node_id: image.source_node_id,
+            source_type: image.source_type,
+            media: image.media
+          })),
+          resolution: nanoNode.data && nanoNode.data.res,
+          aspect_ratio: nanoNode.data && nanoNode.data.aspect
+        }
+      },
+      warnings: ready ? [] : ["Asset Reference gateway is locked. Run Analysis before using this generator."]
+    };
+  }
+
+  function timecodeRange(index, total, seconds){
+    const count = Math.max(1, total || 1);
+    const start = Math.floor((seconds * index) / count);
+    const end = Math.min(seconds, Math.ceil((seconds * (index + 1)) / count));
+    const fmt = (value) => "00:" + String(Math.max(0, value)).padStart(2, "0");
+    return `${fmt(start)} - ${fmt(end)}`;
+  }
+
+  function modelOpticsPromptFromConfig(config){
+    if(!config) return "";
+    return [
+      config.aspect_ratio ? `Aspect ratio ${config.aspect_ratio}.` : "",
+      config.focal_length && config.focal_length !== "As it comes" ? `Focal length ${config.focal_length}.` : "",
+      config.aperture && config.aperture !== "As it comes" ? `Aperture ${config.aperture}.` : "",
+      config.lens_effect && config.lens_effect !== "None" ? `Lens effect: ${config.lens_effect}.` : "",
+      config.shutter_effect && config.shutter_effect !== "Natural Motion Blur" ? `Shutter effect: ${config.shutter_effect}.` : ""
+    ].filter(Boolean).join(" ");
+  }
+
+  function omniPromptJsonForClip(clip, blocks, modelInputs, modelContext){
+    const ctxProps = (modelContext && modelContext.modelProps) || modelProps;
+    const ctxCaps = (modelContext && modelContext.caps) || caps;
+    const seconds = Number((clip && clip.generation_config && clip.generation_config.seconds) || ctxProps.length_seconds || 10);
+    const resolution = String((clip && clip.generation_config && clip.generation_config.resolution) || ctxProps.resolution || "4K").toLowerCase();
+    const fps = Number((clip && clip.generation_config && clip.generation_config.fps) || ctxProps.fps || 24);
+    const batch = normalizeModelBatch((clip && clip.generation_config && clip.generation_config.batch) || ctxProps.batch, "omni_model");
+    const actions = blocks.length ? blocks : [{ type:"prompt", prompt: clip.prompt || "Generate a cohesive Gemini Omni video from the connected multimodal inputs." }];
+    return {
+      generation_config: {
+        engine: "gemini-omni",
+        model: ctxProps.model_ver || "Gemini Omni Flash",
+        editing_layer: ctxProps.editing_layer || "nano-banana-pro",
+        length_seconds: seconds,
+        resolution,
+        fps,
+        batch,
+        native_audio: !!(ctxProps.audio_enabled && ctxCaps.supports_audio)
+      },
+      cinematography: {
+        camera_directions: "Derived from connected Cinematography parameter nodes, prompts, and reference media.",
+        aspect_ratio: (clip && clip.generation_config && clip.generation_config.aspect_ratio) || ctxProps.aspect || "16:9",
+        focal_length: (clip && clip.generation_config && clip.generation_config.focal_length) || ctxProps.focal_length || "As it comes",
+        aperture: (clip && clip.generation_config && clip.generation_config.aperture) || ctxProps.aperture || "As it comes",
+        lens_effect: (clip && clip.generation_config && clip.generation_config.lens_effect) || ctxProps.lens_effect || "None",
+        shutter_effect: (clip && clip.generation_config && clip.generation_config.shutter_effect) || ctxProps.shutter_effect || "Natural Motion Blur",
+        note: "Use video/photo references for motion, framing, and style continuity."
+      },
+      art_direction: {
+        style: "Derived from connected Asset Reference, Nano Banana, and department nodes."
+      },
+      characters: modelInputs.filter(input => ["photo_reference", "video"].includes(input.role)).map(input => ({
+        id: input.source_node_id,
+        description: input.description || input.title,
+        starting_position: input.handle
+      })),
+      action_blocking: actions.map((block, index) => ({
+        timecode: timecodeRange(index, actions.length, seconds),
+        action: block.prompt || block.user_prompt || block.type || "Continue the prior action coherently."
+      })),
+      input_contract: {
+        text: true,
+        photo_references_max: ctxCaps.max_reference_images || 5,
+        video_input: true,
+        audio_input: true,
+        explicit_start_end_frames: false,
+        note: "Official Gemini Omni materials describe photo/video/audio references and video editing, not a Veo-style hard start/end-frame contract."
+      }
+    };
+  }
+
+  function veoVertexModelName(modelId){
+    const value = String(modelId || "");
+    if(value === "veo-3.1-fast" || value === "veo-3.1-fast-generate-preview" || value === "veo-3.1-fast-generate-001"){
+      return "veo-3.1-fast-generate-001";
+    }
+    if(value === "veo-3.1-quality" || value === "veo-3.1-generate-preview" || value === "veo-3.1-generate-001"){
+      return "veo-3.1-generate-001";
+    }
+    return value || "veo-3.1-generate-001";
+  }
+
+  function isVeo31ModelName(modelId){
+    return String(modelId || "").startsWith("veo-3.1");
+  }
+
+  function normalizeVeoDurationSeconds(value, hasReferenceImages){
+    if(hasReferenceImages) return 8;
+    const allowed = [4, 6, 8];
+    const n = Number(value || 8);
+    return allowed.reduce((best, curr) => {
+      const bestDiff = Math.abs(best - n);
+      const currDiff = Math.abs(curr - n);
+      return currDiff < bestDiff || (currDiff === bestDiff && curr > best) ? curr : best;
+    }, 8);
+  }
+
+  function normalizeVeoAspectRatio(value){
+    return String(value || "16:9") === "9:16" ? "9:16" : "16:9";
+  }
+
+  function imageInputFromModelInputs(modelInputs, handle){
+    const input = (modelInputs || []).find(item => item.handle === handle && item.gcs_uri);
+    if(!input) return null;
+    return { gcsUri: input.gcs_uri, mimeType: input.mime_type || "image/jpeg" };
+  }
+
+  function veoReferenceImagesForVertex(referenceImages, modelId){
+    const out = [];
+    for(const ref of referenceImages || []){
+      if(!ref || !ref.gcs_uri) continue;
+      const referenceType = String(ref.reference_type || "asset") === "style" ? "style" : "asset";
+      if(isVeo31ModelName(modelId) && referenceType === "style") continue;
+      out.push({
+        referenceType,
+        image: { gcsUri: ref.gcs_uri, mimeType: ref.mime_type || "image/jpeg" },
+        description: ref.description || ""
+      });
+      if(out.length >= 3) break;
+    }
+    return out;
+  }
+
+  function veoVertexRequestPreview(clip, modelId){
+    const vertexModel = veoVertexModelName(modelId);
+    const blocks = (clip && clip.compiled_blocks) || [];
+    const firstBlock = blocks[0] || {};
+    const modelInputs = (clip && clip.ingredients && clip.ingredients.model_inputs) || [];
+    const startImage = imageInputFromModelInputs(modelInputs, "start");
+    const endImage = startImage ? imageInputFromModelInputs(modelInputs, "end") : null;
+    const referenceImages = startImage ? [] : veoReferenceImagesForVertex(clip && clip.ingredients && clip.ingredients.reference_images, vertexModel);
+    const hasReferenceImages = referenceImages.length > 0;
+    const seconds = normalizeVeoDurationSeconds(clip && clip.generation_config && clip.generation_config.seconds, hasReferenceImages);
+    const requestedFps = clip && clip.generation_config && clip.generation_config.fps;
+    const fps = normalizeVeoFps(requestedFps);
+    const sampleCount = normalizeVeoSampleCount(clip && clip.generation_config && clip.generation_config.batch);
+    const resolution = normalizeVeoResolution(clip && clip.generation_config && clip.generation_config.resolution);
+    const task = startImage ? "imageToVideo" : (hasReferenceImages ? "referenceToVideo" : "textToVideo");
+    const instance = { prompt: (clip && clip.prompt) || "A cinematic shot." };
+    if(startImage){
+      instance.image = startImage;
+      if(endImage) instance.lastFrame = endImage;
+    } else if(hasReferenceImages){
+      instance.referenceImages = referenceImages.map(ref => ({
+        referenceType: ref.referenceType,
+        image: ref.image
+      }));
+    }
+    return {
+      model: vertexModel,
+      instances: [instance],
+      parameters: {
+        task,
+        sampleCount,
+        durationSeconds: seconds,
+        aspectRatio: normalizeVeoAspectRatio((clip && clip.generation_config && clip.generation_config.aspect_ratio) || firstBlock.aspect_ratio),
+        fps,
+        resolution,
+        generateAudio: !!(clip && clip.generation_config && clip.generation_config.audio_enabled),
+        enhancePrompt: true,
+        compressionQuality: "optimized",
+        personGeneration: "allow_adult",
+        resizeMode: "pad"
+      }
+    };
+  }
+
+  function veoPromptJsonForClip(clip, blocks, modelInputs, vertexRequest, modelContext){
+    const ctxCaps = (modelContext && modelContext.caps) || caps;
+    const params = (vertexRequest && vertexRequest.parameters) || {};
+    const instance = (vertexRequest && vertexRequest.instances && vertexRequest.instances[0]) || {};
+    const seconds = Number(params.durationSeconds || 8);
+    const actions = blocks.length ? blocks : [{ type:"prompt", prompt: (clip && clip.prompt) || "Generate a cohesive Veo clip from the connected text and image inputs." }];
+    const references = (clip && clip.ingredients && clip.ingredients.reference_images) || [];
+    return {
+      generation_config: {
+        engine: "veo",
+        provider: "vertex_ai",
+        model: vertexRequest ? vertexRequest.model : veoVertexModelName(ctxCaps.id),
+        task: params.task || "textToVideo",
+        sample_count: params.sampleCount || 1,
+        duration_seconds: seconds,
+        resolution: params.resolution || "1080p",
+        aspect_ratio: params.aspectRatio || "16:9",
+        fps: params.fps || 24,
+        requested_fps: clip && clip.generation_config ? clip.generation_config.fps || null : null,
+        audio_enabled: !!params.generateAudio,
+        enhance_prompt: params.enhancePrompt !== false,
+        compression_quality: params.compressionQuality || "optimized",
+        person_generation: params.personGeneration || "allow_adult",
+        resize_mode: params.resizeMode || "pad"
+      },
+      cinematography: {
+        camera_directions: "Derived from connected Cinematography parameter nodes, prompt blocks, and frame/reference inputs.",
+        focal_length: clip && clip.generation_config ? clip.generation_config.focal_length || "As it comes" : "As it comes",
+        aperture: clip && clip.generation_config ? clip.generation_config.aperture || "As it comes" : "As it comes",
+        lens_effect: clip && clip.generation_config ? clip.generation_config.lens_effect || "None" : "None",
+        shutter_effect: clip && clip.generation_config ? clip.generation_config.shutter_effect || "Natural Motion Blur" : "Natural Motion Blur",
+        first_frame: instance.image ? instance.image.gcsUri : ((clip && clip.ingredients && clip.ingredients.first_frame) || null),
+        last_frame: instance.lastFrame ? instance.lastFrame.gcsUri : null
+      },
+      art_direction: {
+        style: "Derived from Asset Reference analysis, style prompts, and downstream generator prompts.",
+        omitted_style_references: references.filter(ref => String(ref.reference_type || "") === "style").map(ref => ({
+          gcs_uri: ref.gcs_uri,
+          reason: "Veo 3.1 does not accept referenceImages.style; keep style as prompt text instead."
+        }))
+      },
+      characters: (modelInputs || []).filter(input => ["asset1", "asset2", "start", "end"].includes(input.role) || input.source_type === "ref").map(input => ({
+        id: input.source_node_id,
+        role: input.role,
+        description: input.description || input.title,
+        gcs_uri: input.gcs_uri || null
+      })),
+      action_blocking: actions.map((block, index) => ({
+        timecode: timecodeRange(index, actions.length, seconds),
+        action: block.prompt || block.user_prompt || block.type || "Continue the prior action coherently."
+      })),
+      input_contract: {
+        text: true,
+        image_input: !!instance.image,
+        last_frame: !!instance.lastFrame,
+        reference_images: instance.referenceImages || [],
+        reference_images_max: 3,
+        reference_style_supported: false,
+        duration_allowed_seconds: instance.referenceImages ? [8] : [4, 6, 8],
+        note: "This object mirrors the richer Omni prompt JSON, while vertex_request_preview mirrors the strict Vertex request body."
+      },
+      vertex_request_preview: vertexRequest || null
+    };
+  }
+
   function compilePayloadMultiClip(options){
     const quiet = !!(options && options.quiet);
+    const targetModelNode = (options && options.targetModel) || modelNode;
+    const targetModelProps = (targetModelNode && targetModelNode.data) || defaultPropsFor("model");
+    const targetCaps = MODEL_CATALOG[targetModelProps.model_ver] || MODEL_CATALOG["Veo 3.1 Quality"];
     const refNode = nodes.find(n => n.type === "ref") || null;
     const refAnalysis = refNode && isAnalysisActivated(refNode.data && refNode.data.analysis) ? refNode.data.analysis : null;
     const gateBlocked = !!(refNode && !refAnalysis);
-    const modelId = caps.id;
-    const secondsDefault = Number(modelProps.seconds_per_clip || 8);
-    const audio_enabled = !!(modelProps.audio_enabled && caps.supports_audio);
+    const modelId = targetCaps.id;
+    const isOmniModel = !!(targetModelNode && targetModelNode.type === "omni_model");
+    const modelInputs = connectedInputsForModelNode(targetModelNode);
+    const secondsDefault = Math.max(1, Math.min(targetCaps.max_seconds || 30, Number(isOmniModel ? (targetModelProps.length_seconds || 10) : (targetModelProps.seconds_per_clip || 8))));
+    const modelBatchDefault = normalizeModelBatch(targetModelProps.batch, isOmniModel ? "omni_model" : "model");
+    const modelResolutionDefault = isOmniModel ? normalizeOmniResolution(targetModelProps.resolution || "4K") : normalizeVeoResolution(targetModelProps.resolution || "1080p");
+    const modelFpsDefault = isOmniModel ? clampInt(targetModelProps.fps, 12, 60, 24) : clampInt(targetModelProps.fps, 1, 120, 24);
+    const modelAspectDefault = normalizeModelAspect(targetModelProps.aspect || "16:9");
+    const modelFocalDefault = String(targetModelProps.focal_length || "As it comes");
+    const modelApertureDefault = String(targetModelProps.aperture || "As it comes");
+    const modelLensEffectDefault = String(targetModelProps.lens_effect || "None");
+    const modelShutterEffectDefault = String(targetModelProps.shutter_effect || "Natural Motion Blur");
+    const audio_enabled = !!(targetModelProps.audio_enabled && targetCaps.supports_audio);
+    const targetCreditsAndCost = estimateGraphCredits(nodes, edges, targetModelProps, targetCaps, referenceGateReady);
     let reference_images = [];
     let identity_first_frame = null;
     const payloadWarnings = [];
@@ -2518,8 +3625,8 @@ if(type==="clip"){
     } else if(!refNode) {
       if(!quiet) logLine("WARN", `${nowTime()} No Asset Reference node. Identity lock may drift.`);
     }
-    if(reference_images.length > caps.max_reference_images){
-      if(!quiet) logLine("ERROR", `${nowTime()} Compile failed: refs=${reference_images.length} exceeds model max=${caps.max_reference_images}.`);
+    if(reference_images.length > targetCaps.max_reference_images){
+      if(!quiet) logLine("ERROR", `${nowTime()} Compile failed: refs=${reference_images.length} exceeds model max=${targetCaps.max_reference_images}.`);
       return null;
     }
     const clips = nodes.filter(n => n.type === "clip").slice().sort((a,b) => Number((a.data && a.data.clip_index) || 0) - Number((b.data && b.data.clip_index) || 0));
@@ -2555,20 +3662,129 @@ if(type==="clip"){
         const aspect = String((ov.aspect !== undefined ? ov.aspect : (g.data && g.data.aspect)) || "16:9");
         const focal = String((ov.focal_length !== undefined ? ov.focal_length : "As it comes"));
         const aperture = String((ov.aperture !== undefined ? ov.aperture : "As it comes"));
+        const lensEffect = String((ov.lens_effect !== undefined ? ov.lens_effect : "None"));
+        const shutterEffect = String((ov.shutter_effect !== undefined ? ov.shutter_effect : "Natural Motion Blur"));
         const cascadePrompt = (g.data && g.data.cascade_prompt) || nodeCascadePrompt(refAnalysis, g.type);
         const userPrompt = (g.data && g.data.prompt) || "";
-        const finalPrompt = [cascadePrompt, userPrompt].filter(Boolean).join(" ");
+        const opticsPrompt = [
+          focal !== "As it comes" ? `Use ${focal} lens perspective.` : "",
+          aperture !== "As it comes" ? `Aperture ${aperture}.` : "",
+          lensEffect !== "None" ? `Lens effect: ${lensEffect}.` : "",
+          shutterEffect !== "Natural Motion Blur" ? `Shutter effect: ${shutterEffect}.` : ""
+        ].filter(Boolean).join(" ");
+        const finalPrompt = [cascadePrompt, opticsPrompt, userPrompt].filter(Boolean).join(" ");
         const validation_warnings = validationWarningsForPrompt(refAnalysis, finalPrompt);
         payloadWarnings.push(...validation_warnings.map(w => `${g.id}: ${w}`));
-        blocks.push({ node_id: g.id, type: g.type, batch, resolution: res, aspect_ratio: aspect, focal_length: focal, aperture, prompt: finalPrompt, user_prompt:userPrompt, cascade_prompt:cascadePrompt, analysis_ref_id: refAnalysis ? refNode.id : null, validation_warnings });
-        promptParts.push("[" + String(g.type).toUpperCase() + " | batch=" + batch + " | " + res + " | " + aspect + " | focal=" + focal + " | aperture=" + aperture + "] " + finalPrompt);
+        blocks.push({ node_id: g.id, type: g.type, batch, resolution: res, aspect_ratio: aspect, focal_length: focal, aperture, lens_effect:lensEffect, shutter_effect:shutterEffect, prompt: finalPrompt, user_prompt:userPrompt, cascade_prompt:cascadePrompt, analysis_ref_id: refAnalysis ? refNode.id : null, validation_warnings });
+        promptParts.push("[" + String(g.type).toUpperCase() + " | batch=" + batch + " | " + res + " | " + aspect + " | focal=" + focal + " | aperture=" + aperture + " | lens_effect=" + lensEffect + " | shutter_effect=" + shutterEffect + "] " + finalPrompt);
       }
       const output_last_frame_uri = (c.data && c.data.output_last_frame_uri) || ("gs://your-bucket/renders/" + clipName + "_LAST_FRAME.png");
-      compiledClips.push({ clip_name: clipName, clip_index: Number((c.data && c.data.clip_index) || 0), generation_config: { method: "ingredients_to_video", seed: 3003, motion_pacing: "slow", audio_enabled: audio_enabled, seconds: clipSeconds }, ingredients: { reference_images: reference_images, first_frame: first_frame }, prompt: promptParts.join(" ").trim(), compiled_blocks: blocks, output_last_frame_uri: output_last_frame_uri, autochain_to_next_clip: autochain });
+      const generation_config = isOmniModel
+        ? { method: "omni_any_to_video", engine:"gemini-omni", editing_layer:targetModelProps.editing_layer || "nano-banana-pro", audio_enabled:audio_enabled, seconds:clipSeconds, length_seconds:clipSeconds, resolution:modelResolutionDefault, fps:modelFpsDefault, batch:modelBatchDefault, aspect_ratio:modelAspectDefault, focal_length:modelFocalDefault, aperture:modelApertureDefault, lens_effect:modelLensEffectDefault, shutter_effect:modelShutterEffectDefault, multi_turn_editing:true, explicit_start_end_frames:false }
+        : { method: "ingredients_to_video", provider:"vertex_ai", model:veoVertexModelName(modelId), seed: 3003, motion_pacing: "slow", audio_enabled: audio_enabled, seconds: clipSeconds, resolution:modelResolutionDefault, fps:modelFpsDefault, batch:modelBatchDefault, aspect_ratio:modelAspectDefault, focal_length:modelFocalDefault, aperture:modelApertureDefault, lens_effect:modelLensEffectDefault, shutter_effect:modelShutterEffectDefault };
+      const clipPrompt = [modelOpticsPromptFromConfig(generation_config), promptParts.join(" ").trim()].filter(Boolean).join(" ");
+      const clipPayload = { clip_name: clipName, clip_index: Number((c.data && c.data.clip_index) || 0), generation_config, ingredients: { reference_images: reference_images, first_frame: first_frame, model_inputs: modelInputs }, prompt: clipPrompt, compiled_blocks: blocks, output_last_frame_uri: output_last_frame_uri, autochain_to_next_clip: autochain };
+      if(isOmniModel){
+        clipPayload.omni_prompt_json = omniPromptJsonForClip(clipPayload, blocks, modelInputs, { modelProps: targetModelProps, caps: targetCaps });
+      } else {
+        const vertexRequest = veoVertexRequestPreview(clipPayload, modelId);
+        const vertexInstance = vertexRequest.instances && vertexRequest.instances[0] ? vertexRequest.instances[0] : {};
+        const hasStyleRefs = reference_images.some(ref => String(ref.reference_type || "") === "style");
+        const hasExplicitStart = modelInputs.some(input => input.handle === "start" && input.gcs_uri);
+        const hasExplicitEnd = modelInputs.some(input => input.handle === "end" && input.gcs_uri);
+        if(hasStyleRefs && isVeo31ModelName(vertexRequest.model)){
+          payloadWarnings.push(`${clipName}: Veo 3.1 does not accept referenceImages.style, so style refs are kept in prompt JSON but omitted from the Vertex request.`);
+        }
+        if(Number(vertexRequest.parameters.durationSeconds) !== Number(clipSeconds)){
+          payloadWarnings.push(`${clipName}: Veo duration normalized from ${clipSeconds}s to ${vertexRequest.parameters.durationSeconds}s for Vertex compatibility.`);
+        }
+        if(Number(vertexRequest.parameters.fps) !== Number(generation_config.fps)){
+          payloadWarnings.push(`${clipName}: Veo 3.1 currently renders at 24 FPS, so requested ${generation_config.fps} FPS is stored as intent and submitted as ${vertexRequest.parameters.fps} FPS.`);
+        }
+        if(Number(vertexRequest.parameters.sampleCount) !== Number(generation_config.batch)){
+          payloadWarnings.push(`${clipName}: Veo batch normalized from ${generation_config.batch} to ${vertexRequest.parameters.sampleCount} sample(s).`);
+        }
+        if(hasExplicitEnd && !hasExplicitStart){
+          payloadWarnings.push(`${clipName}: End Frame is ignored by Vertex unless Start Frame is also connected.`);
+        }
+        if(hasExplicitStart && reference_images.length){
+          payloadWarnings.push(`${clipName}: Explicit Start/End Frame input takes priority; Vertex request omits referenceImages because image and referenceImages cannot be combined.`);
+        }
+        clipPayload.vertex_request_preview = vertexRequest;
+        clipPayload.veo_prompt_json = veoPromptJsonForClip(clipPayload, blocks, modelInputs, vertexRequest, { modelProps: targetModelProps, caps: targetCaps });
+        clipPayload.generation_config.seconds = vertexRequest.parameters.durationSeconds;
+        clipPayload.generation_config.sample_count = vertexRequest.parameters.sampleCount;
+        clipPayload.generation_config.resolution = vertexRequest.parameters.resolution;
+        clipPayload.generation_config.requested_fps = generation_config.fps;
+        clipPayload.generation_config.fps = vertexRequest.parameters.fps;
+        clipPayload.generation_config.vertex_task = vertexRequest.parameters.task;
+        clipPayload.generation_config.reference_images_submitted = Array.isArray(vertexInstance.referenceImages) ? vertexInstance.referenceImages.length : 0;
+      }
+      compiledClips.push(clipPayload);
       prevClip = { clip_name: clipName, autochain_to_next_clip: autochain, output_last_frame_uri: output_last_frame_uri };
     }
     const payload = {
       model_id: modelId,
+      model_family: isOmniModel ? "gemini_omni" : "veo",
+      output_model_node_id: targetModelNode ? targetModelNode.id : null,
+      output_model_inputs: modelInputs,
+      effective_model_settings: {
+        seconds: secondsDefault,
+        resolution: modelResolutionDefault,
+        fps: isOmniModel ? modelFpsDefault : normalizeVeoFps(modelFpsDefault),
+        requested_fps: modelFpsDefault,
+        batch: modelBatchDefault,
+        aspect_ratio: modelAspectDefault,
+        focal_length: modelFocalDefault,
+        aperture: modelApertureDefault,
+        lens_effect: modelLensEffectDefault,
+        shutter_effect: modelShutterEffectDefault,
+        audio_enabled,
+        upstream_parameters: modelInputs.filter(input => input.role === "parameter").map(input => ({
+          node_id: input.source_node_id,
+          key: input.param_key,
+          value: input.param_values || input.param_value
+        }))
+      },
+      api_compatibility: isOmniModel ? {
+        provider: "google",
+        submit_route: null,
+        submit_ready: false,
+        request_shape: "omni_prompt_json export only",
+        notes: [
+          "Gemini Omni is represented as a separate any-input prompt JSON until an official public submit API is wired in.",
+          "The local /api/veo/submit route intentionally rejects Omni payloads."
+        ]
+      } : {
+        provider: "vertex_ai",
+        submit_route: "/api/veo/submit",
+        submit_ready: !gateBlocked,
+        request_shape: "instances[] + parameters",
+        supported_model_ids: ["veo-3.1-generate-001", "veo-3.1-fast-generate-001"],
+        notes: [
+          "Veo 3.1 durations are normalized to 4, 6, or 8 seconds.",
+          "Reference-image Veo requests are normalized to 8 seconds.",
+          "Veo 3.1 style reference images are omitted from vertex_request_preview and preserved as prompt text guidance."
+        ]
+      },
+      model_capabilities: isOmniModel ? {
+        max_photo_references: targetCaps.max_reference_images || 5,
+        accepts_text: true,
+        accepts_images: true,
+        accepts_video: true,
+        accepts_audio: true,
+        native_audio: true,
+        multi_turn_editing: true,
+        explicit_start_end_frames: false,
+        max_seconds: targetCaps.max_seconds || 10,
+        max_batch: 8
+      } : {
+        max_reference_images: targetCaps.max_reference_images,
+        supports_audio: targetCaps.supports_audio,
+        supported_resolutions: ["720p", "1080p", "4K"],
+        supported_fps: [24],
+        max_batch: 4
+      },
       ready: !gateBlocked,
       gateway: {
         status: refNode ? (refAnalysis ? "active" : "pending_analysis") : "no_asset_reference",
@@ -2584,7 +3800,7 @@ if(type==="clip"){
       } : null,
       warnings: payloadWarnings,
       clips: compiledClips,
-      credits_estimate: creditsAndCost
+      credits_estimate: targetCreditsAndCost
     };
     if(!quiet && !gateBlocked) logLine("INFO", `${nowTime()} Compile OK: built ${compiledClips.length} clip(s).`);
     return payload;
@@ -2802,7 +4018,7 @@ if(type==="clip"){
         <div className="badge">Snap: <span style=${{color: snapEnabled ? "var(--ok)" : "var(--muted)"}}>${snapEnabled ? "On" : "Off"}</span> - S</div>
       </div>
       <div style=${{height:"100%", width:"100%"}} onDrop=${onDrop} onDragOver=${onDragOver}>
-        <${ReactFlow} nodes=${nodes} edges=${renderedEdges} onNodesChange=${onNodesChange} onEdgesChange=${onEdgesChange} onConnect=${onConnect} onConnectStart=${onConnectStart} onConnectEnd=${onConnectEnd} onNodeDrag=${onNodeDrag} onNodeDragStop=${onNodeDragStop} onEdgeClick=${(e, edge)=>{ setSelectedEdgeIds([edge.id]); setSelectedIds([]); setEdgeMenu(null); }} onEdgeContextMenu=${onEdgeContextMenu} nodeTypes=${nodeTypes} edgeTypes=${edgeTypes} fitView=${true} minZoom=${FLOW_MIN_ZOOM} onSelectionChange=${onSelectionChange} selectionOnDrag=${true} selectNodesOnDrag=${true} panOnDrag=${panOnDrag} panActivationKeyCode="Alt" defaultEdgeOptions=${defaultEdgeOptions} proOptions=${proOptions}>
+        <${ReactFlow} nodes=${nodes} edges=${renderedEdges} onNodesChange=${onNodesChange} onEdgesChange=${onEdgesChange} onConnect=${onConnect} onConnectStart=${onConnectStart} onConnectEnd=${onConnectEnd} onNodeClick=${onNodeClick} onNodeDrag=${onNodeDrag} onNodeDragStop=${onNodeDragStop} onEdgeClick=${(e, edge)=>{ setSelectedEdgeIds([edge.id]); setSelectedIds([]); setEdgeMenu(null); }} onEdgeContextMenu=${onEdgeContextMenu} nodeTypes=${nodeTypes} edgeTypes=${edgeTypes} fitView=${true} minZoom=${FLOW_MIN_ZOOM} onSelectionChange=${onSelectionChange} selectionOnDrag=${true} selectNodesOnDrag=${true} panOnDrag=${panOnDrag} panActivationKeyCode="Alt" defaultEdgeOptions=${defaultEdgeOptions} proOptions=${proOptions}>
           <${Background} key="background" gap=${GRID_DOT_GAP} />
           <${MiniMap}
             key="minimap"
@@ -2879,7 +4095,7 @@ if(type==="clip"){
               ` : null}
               <div className="contextBlock">
                 <div className="contextLabel">Selected Node Data</div>
-                <textarea className="jsonEditor contextJson" readOnly>${JSON.stringify(data, null, 2)}</textarea>
+                <textarea className="jsonEditor contextJson" readOnly value=${JSON.stringify(data, null, 2)}></textarea>
               </div>
             `;
           })()}
@@ -2889,10 +4105,17 @@ if(type==="clip"){
     </div>
   `;
 
+  const readOnlyJsonText = selectedNodeJson
+    ? JSON.stringify(selectedNodeJson, null, 2)
+    : (compiledJson ? JSON.stringify(compiledJson, null, 2) : (liveFeed ? JSON.stringify(liveFeed.payload, null, 2) : ""));
+  const readOnlyJsonKey = selectedNodeJson
+    ? `selected:${selectedPrimary ? selectedPrimary.id : "none"}:${selectedNodeJson.feed_type || "node"}:${selectedNodeJson.generator ? selectedNodeJson.generator.model_family || "" : ""}`
+    : (compiledJson ? "compiled" : "live");
+
   const jsonUI = html`
     <div className="panel">
       <div className="panelHeader">
-        <h3>${showingAnalysisJson ? "Analysis JSON" : "JSON Feed"}</h3>
+        <h3>${showingAnalysisJson ? "Analysis JSON" : (selectedNodeJson ? (selectedNodeJson.feed_type === "generator_api_payload" ? "Generator API JSON" : "Node JSON") : "JSON Feed")}</h3>
         <div className="panelHeaderActions">
           <button className=${"panelMiniBtn " + (inspectorOpen ? "active" : "")} onClick=${()=>setInspectorOpen(v=>!v)}>Context</button>
           ${!showingAnalysisJson ? html`
@@ -2912,7 +4135,7 @@ if(type==="clip"){
             }}>Run</button>
             ${compiledJson ? html`<button className="panelMiniBtn" onClick=${()=>{ setCompiledJson(null); logLine("INFO", `${nowTime()} Cleared compiled payload.`); }}>Live</button>` : null}
           ` : null}
-          <span className=${"pill " + (showingAnalysisJson ? (analysisJsonError ? "err" : "ok") : "")}>${showingAnalysisJson ? (analysisJsonError ? "Invalid JSON" : "Editable") : (compiledJson ? "Compiled snapshot" : (liveFeed ? liveFeed.subtitle : 'No model selected'))}</span>
+          <span className=${"pill " + (showingAnalysisJson ? (analysisJsonError ? "err" : "ok") : "")}>${showingAnalysisJson ? (analysisJsonError ? "Invalid JSON" : "Editable") : (selectedNodeJson ? (selectedNodeJson.feed_type === "generator_api_payload" ? (selectedNodeJson.ready ? "API-ready" : "Gateway locked") : ((selectedPrimary.data && selectedPrimary.data.title) || selectedPrimary.type || "Selected node")) : (compiledJson ? "Compiled snapshot" : (liveFeed ? liveFeed.subtitle : 'No model selected')))}</span>
         </div>
       </div>
       <div className="panelBody">
@@ -2920,7 +4143,7 @@ if(type==="clip"){
           <textarea className=${"jsonEditor " + (analysisJsonError ? "jsonError" : "")} value=${analysisJsonDraft} onInput=${(e)=>onAnalysisJsonEdit(e.target.value)} style=${{width:'100%', minHeight:'70vh'}}></textarea>
           ${analysisJsonError ? html`<div className="jsonErrorText">${analysisJsonError}</div>` : null}
         ` : html`
-          <textarea className="jsonEditor" readOnly style=${{width:'100%', minHeight:'70vh'}}>${compiledJson ? JSON.stringify(compiledJson, null, 2) : (liveFeed ? JSON.stringify(liveFeed.payload, null, 2) : '')}</textarea>
+          <textarea key=${readOnlyJsonKey} className="jsonEditor" readOnly value=${readOnlyJsonText} style=${{width:'100%', minHeight:'70vh'}}></textarea>
         `}
       </div>
     </div>

@@ -733,6 +733,25 @@
         width:216px;
         min-width:216px;
         box-shadow:0 8px 20px rgba(0,0,0,.25);
+        transition:background .14s ease, border-color .14s ease, box-shadow .14s ease, filter .14s ease;
+      }
+      .react-flow__node.selected .nodeBox{
+        border-color:rgba(255,255,255,.42);
+        background:
+          linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.045)),
+          rgba(20,20,20,.94);
+        box-shadow:
+          inset 0 0 0 1px rgba(255,255,255,.18),
+          inset 0 0 14px rgba(255,255,255,.08),
+          0 0 14px rgba(255,255,255,.14),
+          0 14px 30px rgba(0,0,0,.36);
+        filter:brightness(1.06);
+      }
+      .react-flow__node.selected .nodeTitleBubble{
+        background:rgba(255,255,255,.08);
+        box-shadow:
+          inset 0 0 6px rgba(255,255,255,.06),
+          0 0 7px rgba(255,255,255,.12);
       }
       .nodeGridBase{
         width:216px;
@@ -749,10 +768,31 @@
       .nodeType-style_ref{
         height:144px;
       }
+      .nodeType-param{
+        height:180px;
+      }
+      .nodeParamLens{
+        width:288px;
+        min-width:288px;
+        height:288px;
+        border-radius:50%;
+        padding:26px 26px 42px;
+        display:flex;
+        flex-direction:column;
+        justify-content:center;
+        align-items:center;
+        text-align:center;
+        overflow:hidden;
+      }
       .nodeModelGrid{
         width:360px;
         min-width:360px;
-        height:144px;
+        height:180px;
+      }
+      .nodeOmniGrid{
+        width:504px;
+        min-width:504px;
+        height:180px;
       }
       .nodeNanoGrid{
         width:396px;
@@ -780,16 +820,48 @@
         line-height:1.08;
         text-transform:uppercase;
       }
+      .nodeTitleBubble{
+        display:inline-flex;
+        align-items:center;
+        max-width:100%;
+        min-height:20px;
+        box-sizing:border-box;
+        margin:0 0 8px;
+        padding:3px 8px;
+        border:1px solid currentColor;
+        border-radius:999px;
+        background:rgba(255,255,255,.045);
+        box-shadow:inset 0 0 12px rgba(255,255,255,.035);
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+      }
+      .nodeParamLens .nodeHeaderRow{
+        justify-content:center;
+        width:100%;
+      }
+      .nodeParamLens .nodeHeaderText{
+        display:flex;
+        justify-content:center;
+        width:100%;
+      }
+      .nodeParamLens .nodeTitleBubble{
+        margin-bottom:10px;
+      }
       .nodeSub{ font-size:11px; color:#cfcfcf; margin:0; }
       .modelInputsRow{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:6px}
       .modelInputsRowTop{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;height:18px;line-height:18px;margin-top:-9px;margin-bottom:2px;transform:translateY(-4.5px)}
+      .omniInputsRowTop{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;height:18px;line-height:18px;margin-top:-9px;margin-bottom:2px;transform:translateY(-4.5px)}
       .topInputsRow{display:flex;gap:6px;align-items:center;height:18px;line-height:18px;margin-top:-9px;margin-bottom:2px;transform:translateY(-4.5px)}
       .topInputsRow span{flex:1;text-align:center}
       .modelInputsRowTop span,
+      .omniInputsRowTop span,
       .topInputsRow span{line-height:18px}
-      .modelInputsRowTop span{
+      .modelInputsRowTop span,
+      .omniInputsRowTop span{
         font-size:10px;
         white-space:nowrap;
+        text-align:center;
       }
       .nodeHeaderRow{
         display:flex;
@@ -798,10 +870,121 @@
       }
       .modelNodeHeaderRow{margin-top:2px}
       .nodeHeaderText{min-width:0}
+      .modelControls,
+      .omniControls{
+        margin-top:9px;
+      }
+      .modelControls select,
+      .modelControls input[type="number"],
+      .omniControls select,
+      .omniControls input[type="number"]{
+        width:100%;
+        min-height:24px;
+        border:1px solid rgba(255,255,255,.12);
+        border-radius:6px;
+        background:rgba(0,0,0,.34);
+        color:#e8e8e8;
+        font-size:10px;
+        padding:3px 6px;
+      }
+      .modelControls input[readonly],
+      .omniControls input[readonly]{
+        color:#aaa;
+        border-color:rgba(255,255,255,.08);
+        background:rgba(0,0,0,.22);
+      }
+      .modelControlGrid,
+      .omniControlGrid{
+        display:grid;
+        grid-template-columns:repeat(5, minmax(0, 1fr));
+        gap:6px;
+        margin-top:7px;
+      }
+      .modelControlGrid label,
+      .omniControlGrid label{
+        margin:0;
+        color:var(--muted);
+        font-size:9px;
+        font-weight:900;
+        text-transform:uppercase;
+      }
+      .modelControlGrid label span,
+      .omniControlGrid label span{
+        display:block;
+        margin-bottom:2px;
+      }
+      .modelAudioToggle input,
+      .omniAudioToggle input{
+        width:auto;
+        min-height:0;
+      }
+      .modelAudioToggle input:disabled{
+        opacity:.4;
+      }
+      .modelParamPortLabel{
+        position:absolute;
+        left:9px;
+        top:99px;
+        color:#8f8f8f;
+        font-size:9px;
+        font-weight:900;
+        line-height:1;
+        text-transform:uppercase;
+        pointer-events:none;
+      }
+      .omniNote{
+        margin-top:7px;
+        font-size:10px;
+        line-height:1.25;
+      }
 
       .nodeMuted{ color:#9b9b9b; font-size:11px; }
       .nodeTagRow{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
       .nodeTag{ font-size:10px; padding:3px 7px; border-radius:999px; border:1px solid rgba(255,255,255,.10); color:#ddd; background:rgba(0,0,0,.25); }
+      .paramControlPanel{
+        margin-top:10px;
+        display:grid;
+        gap:8px;
+      }
+      .lensControlPanel{
+        width:max-content;
+        max-width:188px;
+        gap:7px;
+        text-align:left;
+        transform:translateY(-4px);
+      }
+      .lensControlPanel label,
+      .lensControlPanel select{
+        width:188px;
+      }
+      .lensControlPanel select{
+        padding-left:5px;
+        padding-right:2px;
+      }
+      .paramControlPanel label{
+        display:grid;
+        gap:3px;
+        margin:0;
+        color:var(--muted);
+        font-size:9px;
+        font-weight:900;
+        text-transform:uppercase;
+      }
+      .paramControlPanel select{
+        width:100%;
+        min-height:26px;
+        border:1px solid rgba(255,255,255,.12);
+        border-radius:6px;
+        background:rgba(0,0,0,.34);
+        color:#e8e8e8;
+        font-size:10px;
+        padding:3px 6px;
+      }
+      .paramControlNote{
+        color:#aaa;
+        font-size:9px;
+        line-height:1.25;
+      }
       .nodeDisabled{ opacity:.45; filter: grayscale(.2); }
       .referenceGateOff{
         background:linear-gradient(180deg, rgba(230,57,70,.12), rgba(20,20,20,.94));

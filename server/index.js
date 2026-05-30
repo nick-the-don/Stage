@@ -558,10 +558,99 @@ function normalizeImageSize(value) {
   return "2K";
 }
 
+function veoVertexModelName(modelId) {
+  const value = String(modelId || "");
+  if (value === "veo-3.1-fast" || value === "veo-3.1-fast-generate-preview" || value === "veo-3.1-fast-generate-001") {
+    return "veo-3.1-fast-generate-001";
+  }
+  if (value === "veo-3.1-quality" || value === "veo-3.1-generate-preview" || value === "veo-3.1-generate-001") {
+    return "veo-3.1-generate-001";
+  }
+  return value || "veo-3.1-generate-001";
+}
+
+function isVeo31ModelName(modelName) {
+  return String(modelName || "").startsWith("veo-3.1");
+}
+
+function normalizeVeoDurationSeconds(value, hasReferenceImages) {
+  if (hasReferenceImages) {
+    return 8;
+  }
+  const allowed = [4, 6, 8];
+  const n = Number(value || 8);
+  return allowed.reduce((best, curr) => {
+    const bestDiff = Math.abs(best - n);
+    const currDiff = Math.abs(curr - n);
+    return currDiff < bestDiff || (currDiff === bestDiff && curr > best) ? curr : best;
+  }, 8);
+}
+
+function clampInt(value, min, max, fallback) {
+  const num = Number(value);
+  const safe = Number.isFinite(num) ? num : fallback;
+  return Math.round(Math.max(min, Math.min(max, safe)));
+}
+
+function normalizeVeoResolution(value) {
+  const raw = String(value || "1080p").trim().toUpperCase();
+  if (["SD", "720", "720P"].includes(raw)) {
+    return "720p";
+  }
+  if (["4K", "UHD"].includes(raw)) {
+    return "4K";
+  }
+  if (["HD", "FHD", "FULLHD", "FULL HD", "1080", "1080P", "2K"].includes(raw)) {
+    return "1080p";
+  }
+  return "1080p";
+}
+
+function normalizeVeoFps() {
+  return 24;
+}
+
+function normalizeVeoSampleCount(value) {
+  return clampInt(value, 1, 4, 1);
+}
+
+function imageInputFromModelInputs(modelInputs, handle) {
+  const input = (modelInputs || []).find((item) => item.handle === handle && item.gcs_uri);
+  if (!input) {
+    return null;
+  }
+  return {
+    gcsUri: input.gcs_uri,
+    mimeType: input.mime_type || "image/jpeg",
+  };
+}
+
+function referenceImagesForVeo(referenceImages, modelName) {
+  const out = [];
+  for (const ref of referenceImages || []) {
+    if (!ref?.gcs_uri) {
+      continue;
+    }
+    const referenceType = String(ref.reference_type || "asset") === "style" ? "style" : "asset";
+    if (isVeo31ModelName(modelName) && referenceType === "style") {
+      continue;
+    }
+    out.push({
+      referenceType,
+      image: { gcsUri: ref.gcs_uri, mimeType: ref.mime_type || "image/jpeg" },
+    });
+    if (out.length >= 3) {
+      break;
+    }
+  }
+  return out;
+}
+
 function buildVeoRequest(payload) {
-  const modelName = payload.model_id === "veo-3.1-fast"
-    ? "veo-3.1-fast-generate-preview"
-    : "veo-3.1-generate-preview";
+  if (payload?.model_family === "gemini_omni" || String(payload?.model_id || "").startsWith("gemini-omni")) {
+    throw new Error("Gemini Omni payloads can be compiled/exported, but this local /api/veo/submit route only submits Veo models for now.");
+  }
+  const modelName = veoVertexModelName(payload.model_id);
 
   const clips = payload.clips || [];
   if (!clips.length) {
@@ -572,33 +661,43 @@ function buildVeoRequest(payload) {
   const generationConfig = clip.generation_config || {};
   const blocks = clip.compiled_blocks || [];
   const firstBlock = blocks[0] || {};
-  let aspectRatio = String(firstBlock.aspect_ratio || "16:9");
+  let aspectRatio = String(generationConfig.aspect_ratio || firstBlock.aspect_ratio || "16:9");
   if (!["9:16", "16:9"].includes(aspectRatio)) {
     aspectRatio = "16:9";
   }
 
-  const referenceImages = [];
-  for (const ref of clip.ingredients?.reference_images || []) {
-    if (!ref.gcs_uri) {
-      continue;
-    }
-    referenceImages.push({
-      referenceType: ref.reference_type || "asset",
-      image: { gcsUri: ref.gcs_uri, mimeType: "image/jpeg" },
-    });
-  }
+  const modelInputs = clip.ingredients?.model_inputs || [];
+  const startImage = imageInputFromModelInputs(modelInputs, "start");
+  const endImage = startImage ? imageInputFromModelInputs(modelInputs, "end") : null;
+  const referenceImages = startImage ? [] : referenceImagesForVeo(clip.ingredients?.reference_images, modelName);
+  const task = startImage ? "imageToVideo" : (referenceImages.length ? "referenceToVideo" : "textToVideo");
 
   const body = {
-    instances: [{ prompt: clip.prompt || "A cinematic shot." }],
+    instances: [{
+      prompt: clip.prompt || "A cinematic shot.",
+    }],
     parameters: {
-      durationSeconds: Number(generationConfig.seconds || 8),
+      task,
+      sampleCount: normalizeVeoSampleCount(generationConfig.sample_count || generationConfig.batch || 1),
+      durationSeconds: normalizeVeoDurationSeconds(generationConfig.seconds || 8, referenceImages.length > 0),
       aspectRatio,
+      fps: normalizeVeoFps(generationConfig.fps),
+      resolution: normalizeVeoResolution(generationConfig.resolution),
       generateAudio: Boolean(generationConfig.audio_enabled),
+      enhancePrompt: true,
+      compressionQuality: "optimized",
+      personGeneration: "allow_adult",
+      resizeMode: "pad",
     },
   };
 
-  if (referenceImages.length) {
-    body.instances[0].referenceImages = referenceImages.slice(0, 3);
+  if (startImage) {
+    body.instances[0].image = startImage;
+    if (endImage) {
+      body.instances[0].lastFrame = endImage;
+    }
+  } else if (referenceImages.length) {
+    body.instances[0].referenceImages = referenceImages;
   }
 
   return { modelName, body };
